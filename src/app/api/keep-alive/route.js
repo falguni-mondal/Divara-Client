@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
 
-export const dynamic = "force-dynamic";
-
 export async function GET() {
   const apiBase = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1").replace(
     /\/+$/,
@@ -21,12 +19,15 @@ export async function GET() {
     });
     clearTimeout(timeout);
 
-    return NextResponse.json({
-      ok: res.ok,
-      backendStatus: res.status,
-      latencyMs: Date.now() - startedAt,
-      timestamp: new Date().toISOString(),
-    });
+    return NextResponse.json(
+      {
+        ok: res.ok,
+        backendStatus: res.status,
+        latencyMs: Date.now() - startedAt,
+        timestamp: new Date().toISOString(),
+      },
+      { headers: { "Cache-Control": "no-store" } }
+    );
   } catch (err) {
     return NextResponse.json(
       {
@@ -35,7 +36,7 @@ export async function GET() {
         latencyMs: Date.now() - startedAt,
         timestamp: new Date().toISOString(),
       },
-      { status: 502 }
+      { status: 502, headers: { "Cache-Control": "no-store" } }
     );
   }
 }
