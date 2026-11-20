@@ -8,6 +8,7 @@ import {
   ShoppingBag,
   Boxes,
   Package,
+  Users,
   Tag,
   MessageSquare,
   Star,
@@ -24,6 +25,7 @@ import AdminUtmTab from "./AdminUtmTab";
 import AdminProductsTab from "./AdminProductsTab";
 import AdminInventoryTab from "./AdminInventoryTab";
 import AdminOrdersTab from "./AdminOrdersTab";
+import AdminUsersTab from "./AdminUsersTab";
 import AdminCouponsTab from "./AdminCouponsTab";
 import AdminTicketsTab from "./AdminTicketsTab";
 import AdminReviewsTab from "./AdminReviewsTab";
@@ -44,6 +46,7 @@ function AdminPanelInner() {
     { id: "products", label: "Products", icon: ShoppingBag },
     { id: "inventory", label: "Inventory", icon: Boxes },
     { id: "orders", label: "Orders", icon: Package },
+    { id: "users", label: "Users", icon: Users },
     { id: "coupons", label: "Coupons", icon: Tag },
     { id: "tickets", label: "Contact Tickets", icon: MessageSquare },
     { id: "reviews", label: "Reviews & Approval", icon: Star },
@@ -111,6 +114,7 @@ function AdminPanelInner() {
 
       {mobileNavOpen && (
         <div
+          data-lenis-prevent
           onClick={() => setMobileNavOpen(false)}
           className="fixed inset-0 z-[1005] bg-black/45 lg:hidden"
         >
@@ -173,7 +177,7 @@ function AdminPanelInner() {
         </div>
       )}
 
-      <main className="flex-1 min-w-0 px-4 sm:px-8 lg:px-10 py-6 lg:py-8">
+      <div className="flex-1 min-w-0 px-4 sm:px-8 lg:px-10 py-6 lg:py-8">
         <div className="lg:hidden flex items-center justify-between gap-3 pb-4 mb-6 border-b border-[#1b1717]/15">
           <button
             type="button"
@@ -194,13 +198,14 @@ function AdminPanelInner() {
         {activeTab === "products" && <AdminProductsTab />}
         {activeTab === "inventory" && <AdminInventoryTab />}
         {activeTab === "orders" && <AdminOrdersTab />}
+        {activeTab === "users" && <AdminUsersTab />}
         {activeTab === "coupons" && <AdminCouponsTab />}
         {activeTab === "tickets" && <AdminTicketsTab />}
         {activeTab === "reviews" && <AdminReviewsTab />}
         {activeTab === "cms" && <AdminCmsTab />}
         {activeTab === "logs" && <AdminLogsTab />}
         {activeTab === "team" && isSuperAdmin && <AdminTeamTab />}
-      </main>
+      </div>
     </div>
   );
 }
