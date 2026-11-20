@@ -1,26 +1,114 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Strict 60:30:10 Luxury Color Palette (Max 3 Colors) */
+  --white: #ffffff;        /* 60% Dominant: Pure Crisp White */
+  --noir-black: #1b1717;   /* 30% Secondary: Noir Black / Obsidian */
+  --deep-maroon: #5d100a;  /* 10% Accent: Deep Royal Maroon */
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-ivory: var(--white);
+  --color-obsidian: var(--noir-black);
+  --color-maroon: var(--deep-maroon);
+  --font-serif: var(--font-bodoni), Georgia, serif;
+  --font-sans: var(--font-lato), system-ui, sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* Lenis Recommended Base Styles (Prevents Scroll Jumping & Height Bugs) */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+  background-color: #ffffff;
+  color: var(--noir-black);
+  font-family: var(--font-lato), sans-serif;
+  overflow-x: hidden;
+}
+
+/* Serif font strictly for headings only */
+h1,
+h2,
+h3,
+.heading-serif {
+  font-family: var(--font-bodoni), Georgia, serif;
+}
+
+::selection {
+  background-color: var(--deep-maroon);
+  color: var(--white);
+}
+
+.maroon {
+  background-color: var(--deep-maroon);
+  color: var(--white);
+}
+
+.white {
+  background-color: var(--white);
+  color: var(--noir-black);
+}
+
+.noir-black {
+  background-color: var(--noir-black);
+  color: var(--white);
+}
+
+/* Pure Overflow-Hidden Mask Trick Fallback (No Opacity Fade) */
+.animate-updown {
+  animation: overflowSlideLoop 3.2s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  will-change: transform;
+}
+
+@keyframes overflowSlideLoop {
+  0% {
+    transform: translate3d(0, 115%, 0);
+  }
+  28% {
+    transform: translate3d(0, 0%, 0);
+  }
+  72% {
+    transform: translate3d(0, 0%, 0);
+  }
+  100% {
+    transform: translate3d(0, -115%, 0);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Unzoom-on-Hover Micro-Interaction:
+   Strictly scoped to CategoryShowcase (the section under the Home Hero) */
+.shop-category-item .zoom-out-img {
+  transform: scale(1.07);
+  transition: transform 0.65s cubic-bezier(0.25, 1, 0.5, 1);
+  will-change: transform;
+}
+
+.shop-category-item:hover .zoom-out-img {
+  transform: scale(1);
+}
+
+/* Hide Scrollbar Utility for Horizontal Luxury Showcase */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
