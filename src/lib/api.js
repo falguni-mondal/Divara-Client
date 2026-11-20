@@ -23,18 +23,23 @@ function flushQueue(error) {
   pendingQueue = [];
 }
 
-// Automatically rotates expired 15m access JWT via HttpOnly refresh cookie once
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const original = error.config;
     const status = error.response?.status;
-    const isAuthRoute =
-      original?.url?.includes("/auth/refresh") ||
-      original?.url?.includes("/auth/continue") ||
-      original?.url?.includes("/auth/identify");
+    const url = original?.url || "";
 
-    if (status === 401 && !original?._retry && !isAuthRoute) {
+    // Never run silent refresh on login, OTP, TOTP, or refresh endpoints themselves
+    const skipRefresh =
+      url.includes("/auth/refresh") ||
+      url.includes("/auth/continue") ||
+      url.includes("/auth/identify") ||
+      url.includes("/auth/verify-otp") ||
+      url.includes("/auth/verify-totp") ||
+      url.includes("/auth/super-admin-email-otp");
+
+    if (status === 401 && !original?._retry && !skipRefresh) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
           pendingQueue.push({ resolve, reject });

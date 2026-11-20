@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { Bodoni_Moda, Lato } from "next/font/google";
 import "./globals.css";
 import SmoothScrollProvider from "@/components/providers/SmoothScrollProvider";
@@ -5,6 +6,7 @@ import { ShopProvider } from "@/context/ShopContext";
 import Navbar from "@/components/layout/Navbar";
 import CartDrawer from "@/components/cart/CartDrawer";
 import Footer from "@/components/layout/Footer";
+import UtmTracker from "@/components/analytics/UtmTracker";
 
 const bodoniModa = Bodoni_Moda({
   variable: "--font-bodoni",
@@ -45,9 +47,12 @@ export default function RootLayout({ children }) {
     >
       <body
         suppressHydrationWarning
-        className="min-h-dvh flex flex-col bg-[#ffffff] text-[#1b1717]"
+        className="min-h-svh flex flex-col bg-[#ffffff] text-[#1b1717]"
       >
         <ShopProvider>
+          <Suspense fallback={null}>
+            <UtmTracker />
+          </Suspense>
           <SmoothScrollProvider>
             <Navbar />
             <CartDrawer />

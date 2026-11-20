@@ -2,10 +2,11 @@
 
 import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
-import { Eye, EyeOff, LogOut, Package } from "lucide-react";
+import { Eye, EyeOff, LogOut, Package, ShieldCheck } from "lucide-react";
 import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
 import InteractiveInput from "@/components/ui/InteractiveInput";
+import AdminPanel from "@/components/admin/AdminPanel";
 import { api, API_BASE_URL, getApiErrorMessage } from "@/lib/api";
 import { useShop } from "@/context/ShopContext";
 import { formatINR } from "@/data/catalogData";
@@ -22,45 +23,43 @@ function GoogleIcon() {
 }
 
 export default function AccountPage() {
-  const { user, authLoading, refreshSession, logout } = useShop();
+  const { user, isAdmin, authLoading, refreshSession, logout } = useShop();
   const [step, setStep] = useState("email");
   const [authMode, setAuthMode] = useState("login");
   const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+
+  const [otpPurpose, setOtpPurpose] = useState("CUSTOMER_REGISTER");
+  const [maskedTarget, setMaskedTarget] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [totpSetup, setTotpSetup] = useState(null);
+
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [orders, setOrders] = useState([]);
   const pageRef = useRef(null);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || isAdmin) return;
     api
       .get("/checkout/orders")
       .then(({ data }) => setOrders(data.data?.orders || []))
       .catch(() => setOrders([]));
-  }, [user]);
+  }, [user, isAdmin]);
 
   useGSAP(
     () => {
       const items = pageRef.current?.querySelectorAll(".account-reveal");
       if (!items || items.length === 0) return;
-
       gsap.fromTo(
         items,
         { y: 24, opacity: 0 },
-        {
-          y: 0,
-          opacity: 1,
-          duration: 0.75,
-          stagger: 0.1,
-          ease: "power3.out",
-          clearProps: "transform",
-        }
+        { y: 0, opacity: 1, duration: 0.75, stagger: 0.1, ease: "power3.out", clearProps: "transform" }
       );
     },
-    { scope: pageRef, dependencies: [Boolean(user)] }
+    { scope: pageRef, dependencies: [Boolean(user), step] }
   );
 
   const handleEmailSubmit = async (e) => {
@@ -84,13 +83,30 @@ export default function AccountPage() {
     setErrorMsg("");
     setSubmitting(true);
     try {
-      await api.post("/auth/continue", {
+      const { data } = await api.post("/auth/continue", {
         email: email.trim(),
         password,
         ...(authMode === "register" && fullName.trim() ? { fullName: fullName.trim() } : {}),
       });
-      await refreshSession();
-      setPassword("");
+
+      const res = data.data || {};
+      if (res.verificationType === "EMAIL_OTP") {
+        setOtpPurpose(res.purpose);
+        setMaskedTarget(res.maskedTarget || email);
+        setOtpCode("");
+        setStep("email_otp");
+      } else if (res.verificationType === "TOTP") {
+        setTotpSetup(
+          res.needsTotpSetup
+            ? { manualSecret: res.manualSecret, otpauthUrl: res.otpauthUrl }
+            : null
+        );
+        setOtpCode("");
+        setStep("totp");
+      } else {
+        await refreshSession();
+        setPassword("");
+      }
     } catch (err) {
       setErrorMsg(getApiErrorMessage(err, "Authentication failed."));
     } finally {
@@ -98,21 +114,80 @@ export default function AccountPage() {
     }
   };
 
-  const handleGoogleLogin = () => {
-    window.location.href = `${API_BASE_URL}/auth/google`;
+  const handleSuperAdminEmailOtpFallback = async () => {
+    setErrorMsg("");
+    setSubmitting(true);
+    try {
+      const { data } = await api.post("/auth/super-admin-email-otp", {
+        email: email.trim(),
+        password,
+      });
+      setOtpPurpose("ADMIN_LOGIN");
+      setMaskedTarget(data.data?.maskedTarget || "your email");
+      setOtpCode("");
+      setStep("email_otp");
+    } catch (err) {
+      setErrorMsg(getApiErrorMessage(err, "Could not send Email OTP."));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleVerifyEmailOtp = async (e) => {
+    e.preventDefault();
+    setErrorMsg("");
+    setSubmitting(true);
+    try {
+      await api.post("/auth/verify-otp", {
+        email: email.trim(),
+        otp: otpCode.trim(),
+        purpose: otpPurpose,
+      });
+      await refreshSession();
+      setOtpCode("");
+      setPassword("");
+    } catch (err) {
+      setErrorMsg(getApiErrorMessage(err, "Invalid verification code."));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleVerifyTotp = async (e) => {
+    e.preventDefault();
+    setErrorMsg("");
+    setSubmitting(true);
+    try {
+      await api.post("/auth/verify-totp", {
+        email: email.trim(),
+        code: otpCode.trim(),
+      });
+      await refreshSession();
+      setOtpCode("");
+      setPassword("");
+      setTotpSetup(null);
+    } catch (err) {
+      setErrorMsg(getApiErrorMessage(err, "Invalid authenticator code."));
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (authLoading) {
     return (
-      <div className="w-full min-h-[60vh] flex items-center justify-center pt-28 text-xs uppercase tracking-[0.2em] text-[#1b1717]/60">
+      <div className="w-full min-h-[65vh] flex items-center justify-center pt-32 text-xs uppercase tracking-[0.2em] text-[#1b1717]/60">
         Loading Account...
       </div>
     );
   }
 
+  if (user && isAdmin) {
+    return <AdminPanel />;
+  }
+
   if (user) {
     return (
-      <div ref={pageRef} className="w-full pt-28 pb-20 px-[3vw] lg:px-10 max-w-[1140px] mx-auto">
+      <div ref={pageRef} className="w-full pt-28 sm:pt-36 lg:pt-40 pb-24 px-[3vw] lg:px-10 max-w-[1140px] mx-auto">
         <div className="account-reveal flex flex-wrap items-end justify-between gap-4 border-b border-[#1b1717]/15 pb-6">
           <div>
             <span className="text-[11px] uppercase tracking-[0.22em] text-[#5d100a] font-semibold">
@@ -181,38 +256,50 @@ export default function AccountPage() {
     <div
       ref={pageRef}
       id="account-page"
-      className="w-full pt-[80px] sm:pt-28 pb-20 px-[10vw] sm:px-6 max-w-md mx-auto"
+      className="w-full pt-28 sm:pt-36 lg:pt-40 pb-24 px-[8vw] sm:px-6 max-w-md mx-auto"
     >
       <div id="account-page-main-container" className="w-full">
-        <h1 className="account-reveal account-page-heading heading-serif text-[8.5vw] sm:text-2xl lg:text-[28px] uppercase font-light leading-none text-center">
+        <h1 className="account-reveal account-page-heading heading-serif text-[8vw] sm:text-2xl lg:text-[28px] uppercase font-light leading-none text-center">
           My Divara Account
         </h1>
 
-        <section className="account-reveal third-party-signin-section mt-[5vh] sm:mt-7">
-          <button
-            type="button"
-            onClick={handleGoogleLogin}
-            className="google-signin-btn flex items-center justify-center gap-2.5 text-[3vw] sm:text-xs uppercase font-semibold w-full h-[3rem] border-[1.5px] border-zinc-800 rounded-[3px] cursor-pointer hover:bg-zinc-50 transition-colors"
-          >
-            <GoogleIcon />
-            <span>Continue with Google</span>
-          </button>
-        </section>
+        {step === "email" && (
+          <>
+            <section className="account-reveal third-party-signin-section mt-7">
+              <button
+                type="button"
+                onClick={() => (window.location.href = `${API_BASE_URL}/auth/google`)}
+                className="google-signin-btn flex items-center justify-center gap-2.5 text-xs uppercase font-semibold w-full h-[3rem] border-[1.5px] border-zinc-800 rounded-[3px] cursor-pointer hover:bg-zinc-50 transition-colors"
+              >
+                <GoogleIcon />
+                <span>Continue with Google</span>
+              </button>
+            </section>
+            <span className="account-reveal block w-full text-center uppercase font-semibold text-xs my-5">
+              or
+            </span>
+          </>
+        )}
 
-        <span className="account-reveal block w-full text-center uppercase font-semibold text-[3.5vw] sm:text-xs my-[3vh] sm:my-5">
-          or
-        </span>
-
-        <div className="account-reveal signin-heading-container">
-          <h2 className="heading-serif text-[6vw] sm:text-lg lg:text-xl uppercase text-center signin-heading font-normal">
-            Continue with your email address
+        <div className="account-reveal signin-heading-container mt-4">
+          <h2 className="heading-serif text-lg lg:text-xl uppercase text-center font-normal">
+            {step === "totp"
+              ? "Super Admin Authenticator"
+              : step === "email_otp"
+              ? "Email Verification Code"
+              : "Continue with your email address"}
           </h2>
-          <p className="signin-subheading text-[4vw] sm:text-xs text-center mt-[4vh] sm:mt-3 text-zinc-600">
-            {step === "email"
-              ? "Sign in with your email and password or create a profile if you are new."
-              : authMode === "register"
-              ? "Create your DIVARA profile with a password (min. 8 characters)."
-              : "Welcome back. Enter your password to sign in."}
+          <p className="text-xs text-center mt-2.5 text-zinc-600">
+            {step === "email" && "Sign in with your email and password or create a profile if you are new."}
+            {step === "signin" &&
+              (authMode === "register"
+                ? "Create your DIVARA profile. We will send a 6-digit OTP to verify your email."
+                : "Welcome back. Enter your password to continue.")}
+            {step === "email_otp" && `Enter the 6-digit code sent to ${maskedTarget}.`}
+            {step === "totp" &&
+              (totpSetup
+                ? "Scan this QR code in Microsoft Authenticator or Google Authenticator, then enter the 6-digit code."
+                : "Open Microsoft / Google Authenticator and enter your 6-digit code.")}
           </p>
         </div>
 
@@ -222,8 +309,8 @@ export default function AccountPage() {
           </div>
         )}
 
-        {step === "email" ? (
-          <section className="account-reveal w-full py-[3vh] sm:py-5" id="auth-base-form-section">
+        {step === "email" && (
+          <section className="account-reveal w-full py-5">
             <form onSubmit={handleEmailSubmit} className="w-full">
               <InteractiveInput
                 variant="account"
@@ -233,20 +320,19 @@ export default function AccountPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
-
-              <div className="form-btn-container w-full mt-6">
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="w-full h-[3rem] bg-[#1b1717] hover:bg-[#5d100a] transition-colors rounded-[3px] text-[#ffffff] text-[0.7rem] uppercase font-semibold cursor-pointer disabled:opacity-50"
-                >
-                  {submitting ? "checking..." : "continue"}
-                </button>
-              </div>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full h-[3rem] mt-6 bg-[#1b1717] hover:bg-[#5d100a] transition-colors rounded-[3px] text-[#ffffff] text-[0.7rem] uppercase font-semibold cursor-pointer disabled:opacity-50"
+              >
+                {submitting ? "checking..." : "continue"}
+              </button>
             </form>
           </section>
-        ) : (
-          <section className="account-reveal w-full py-[3vh] sm:py-5">
+        )}
+
+        {step === "signin" && (
+          <section className="account-reveal w-full py-5">
             <form onSubmit={handlePasswordSubmit} className="w-full flex flex-col gap-4">
               <InteractiveInput
                 variant="account"
@@ -302,7 +388,88 @@ export default function AccountPage() {
                 disabled={submitting}
                 className="w-full h-[3rem] bg-[#1b1717] hover:bg-[#5d100a] transition-colors rounded-[3px] text-[#ffffff] text-[0.7rem] uppercase font-semibold cursor-pointer mt-2 disabled:opacity-50"
               >
-                {submitting ? "please wait..." : authMode === "register" ? "create account" : "sign in"}
+                {submitting ? "verifying..." : authMode === "register" ? "send verification otp" : "continue"}
+              </button>
+            </form>
+          </section>
+        )}
+
+        {step === "email_otp" && (
+          <section className="account-reveal w-full py-5">
+            <form onSubmit={handleVerifyEmailOtp} className="space-y-5">
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="\d{6}"
+                maxLength={6}
+                required
+                value={otpCode}
+                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
+                placeholder="000000"
+                className="w-full h-14 text-center text-2xl tracking-[0.5em] font-mono border border-[#1b1717]/30 focus:border-[#5d100a] outline-none"
+              />
+              <button
+                type="submit"
+                disabled={submitting || otpCode.length !== 6}
+                className="w-full h-[3rem] bg-[#5d100a] hover:bg-[#1b1717] transition-colors rounded-[3px] text-[#ffffff] text-[0.7rem] uppercase font-semibold cursor-pointer disabled:opacity-50"
+              >
+                {submitting ? "verifying..." : "verify & continue"}
+              </button>
+            </form>
+          </section>
+        )}
+
+        {step === "totp" && (
+          <section className="account-reveal w-full py-5 space-y-5">
+            {totpSetup && (
+              <div className="border border-[#1b1717]/15 p-4 text-center space-y-3 bg-[#ffffff]">
+                <div className="flex items-center justify-center gap-1.5 text-[11px] uppercase tracking-widest text-[#5d100a] font-semibold">
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>First-Time Authenticator Setup</span>
+                </div>
+                <img
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(
+                    totpSetup.otpauthUrl
+                  )}`}
+                  alt="Super Admin TOTP QR Code"
+                  className="mx-auto w-44 h-44 border border-[#1b1717]/10 p-1.5"
+                />
+                <div className="text-[11px] text-[#1b1717]/70">
+                  Manual Key:{" "}
+                  <code className="font-mono font-semibold text-[#1b1717] select-all">
+                    {totpSetup.manualSecret}
+                  </code>
+                </div>
+              </div>
+            )}
+
+            <form onSubmit={handleVerifyTotp} className="space-y-4">
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="\d{6}"
+                maxLength={6}
+                required
+                value={otpCode}
+                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
+                placeholder="000000"
+                className="w-full h-14 text-center text-2xl tracking-[0.5em] font-mono border border-[#1b1717]/30 focus:border-[#5d100a] outline-none"
+              />
+              <button
+                type="submit"
+                disabled={submitting || otpCode.length !== 6}
+                className="w-full h-[3rem] bg-[#5d100a] hover:bg-[#1b1717] transition-colors rounded-[3px] text-[#ffffff] text-[0.7rem] uppercase font-semibold cursor-pointer disabled:opacity-50"
+              >
+                {submitting ? "authenticating..." : "verify authenticator code"}
+              </button>
+
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={handleSuperAdminEmailOtpFallback}
+                className="w-full py-2 text-[11px] uppercase tracking-widest underline text-[#1b1717]/75 hover:text-[#5d100a] cursor-pointer"
+              >
+                Verify using Email OTP instead
               </button>
             </form>
           </section>

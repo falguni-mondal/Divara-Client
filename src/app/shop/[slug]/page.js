@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect, Suspense } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { Plus, ArrowLeft } from "lucide-react";
+import { Plus, ArrowLeft, Lock } from "lucide-react";
 import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
@@ -34,7 +34,7 @@ function ProductDetailContent() {
   const [selectedSize, setSelectedSize] = useState(fallbackProduct.sizes[0]);
   const [openAccordion, setOpenAccordion] = useState("details");
 
-  const { addToBag } = useShop();
+  const { addToBag, isAdmin } = useShop();
   const { refreshScroll } = useSmoothScroll();
   const { seasonAndYear } = useSeasonAndYear();
   const pageRef = useRef(null);
@@ -208,11 +208,14 @@ function ProductDetailContent() {
                   <button
                     key={size}
                     type="button"
+                    disabled={isAdmin}
                     onClick={() => setSelectedSize(size)}
-                    className={`px-4 py-2 text-xs uppercase tracking-wider border rounded-[2px] transition-colors cursor-pointer ${
-                      selectedSize === size
-                        ? "bg-[#5d100a] text-[#ffffff] border-[#5d100a]"
-                        : "border-[#1b1717]/25 text-[#1b1717] hover:border-[#1b1717]"
+                    className={`px-4 py-2 text-xs uppercase tracking-wider border rounded-[2px] transition-colors ${
+                      isAdmin
+                        ? "border-[#1b1717]/15 text-[#1b1717]/35 bg-[#1b1717]/5 cursor-not-allowed"
+                        : selectedSize === size
+                        ? "bg-[#5d100a] text-[#ffffff] border-[#5d100a] cursor-pointer"
+                        : "border-[#1b1717]/25 text-[#1b1717] hover:border-[#1b1717] cursor-pointer"
                     }`}
                   >
                     {size}
@@ -224,11 +227,30 @@ function ProductDetailContent() {
             <div className="pdp-reveal mt-8">
               <button
                 type="button"
-                onClick={() => addToBag(product, selectedSize)}
-                className="w-full py-3.5 px-6 text-xs uppercase tracking-widest font-semibold bg-[#1b1717] text-[#ffffff] hover:bg-[#5d100a] transition-colors duration-300 rounded-[2px] cursor-pointer"
+                disabled={isAdmin}
+                onClick={() => !isAdmin && addToBag(product, selectedSize)}
+                aria-disabled={isAdmin}
+                title={isAdmin ? "Shopping is disabled for Admin accounts" : "Add to Bag"}
+                className={`w-full py-3.5 px-6 text-xs uppercase tracking-widest font-semibold rounded-[2px] transition-colors duration-300 flex items-center justify-center gap-2 ${
+                  isAdmin
+                    ? "bg-[#1b1717]/10 text-[#1b1717]/40 border border-[#1b1717]/20 cursor-not-allowed select-none"
+                    : "bg-[#1b1717] text-[#ffffff] hover:bg-[#5d100a] cursor-pointer"
+                }`}
               >
-                Add to Bag — {formatINR(product.price)}
+                {isAdmin ? (
+                  <>
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Add to Bag Disabled (Admin Mode)</span>
+                  </>
+                ) : (
+                  <span>Add to Bag — {formatINR(product.price)}</span>
+                )}
               </button>
+              {isAdmin && (
+                <p className="mt-2 text-[11px] text-[#1b1717]/55 text-center">
+                  Signed in as Admin. Switch to a customer account to test bag or checkout.
+                </p>
+              )}
             </div>
 
             <div className="pdp-reveal mt-8 divide-y divide-[#1b1717]/15 border-y border-[#1b1717]/15">
@@ -266,10 +288,8 @@ function ProductDetailContent() {
           </div>
         </div>
 
-        {/* Authenticated Ratings & Reviews with Max 3 ImageKit Photos */}
         <ProductReviews productSlug={product.slug} />
 
-        {/* Related Items */}
         <div className="pdp-related-section mt-20 border-t border-[#1b1717]/15 pt-12">
           <h2 className="pdp-related-reveal heading-serif text-xl sm:text-2xl font-normal mb-6">
             You May Also Like

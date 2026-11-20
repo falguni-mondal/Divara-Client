@@ -23,7 +23,19 @@ export function ShopProvider({ children }) {
   const [appliedCoupon, setAppliedCoupon] = useState(null);
   const [bagError, setBagError] = useState("");
 
-  const syncBagAndAutoCoupon = useCallback(async () => {
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+  const isSuperAdmin =
+    user?.role === "super_admin" && user?.email?.toLowerCase() === "admin@divara.com";
+
+  const syncBagAndAutoCoupon = useCallback(async (roleOverride = null) => {
+    const role = roleOverride || user?.role;
+    if (role === "admin" || role === "super_admin") {
+      setBag([]);
+      setWishlist([]);
+      setAppliedCoupon(null);
+      return;
+    }
+
     try {
       const { data: bagRes } = await api.get("/bag");
       const items = bagRes.data?.items || [];
@@ -44,14 +56,15 @@ export function ShopProvider({ children }) {
       setWishlist([]);
       setAppliedCoupon(null);
     }
-  }, []);
+  }, [user?.role]);
 
   const refreshSession = useCallback(async () => {
     setAuthLoading(true);
     try {
       const { data } = await api.get("/auth/me");
-      setUser(data.data?.user || null);
-      await syncBagAndAutoCoupon();
+      const fetchedUser = data.data?.user || null;
+      setUser(fetchedUser);
+      await syncBagAndAutoCoupon(fetchedUser?.role);
     } catch {
       setUser(null);
       setBag([]);
@@ -80,6 +93,7 @@ export function ShopProvider({ children }) {
 
   const addToBag = async (product, selectedSize = "M") => {
     setBagError("");
+    if (isAdmin) return false;
     if (!user) {
       router.push("/account?next=bag");
       return false;
@@ -104,13 +118,9 @@ export function ShopProvider({ children }) {
 
   const updateQuantity = async (id, size, delta) => {
     setBagError("");
-    if (!user) return;
+    if (!user || isAdmin) return;
     try {
-      const { data } = await api.patch("/bag/items", {
-        productId: id,
-        size,
-        delta,
-      });
+      const { data } = await api.patch("/bag/items", { productId: id, size, delta });
       setBag(data.data?.items || []);
       await syncBagAndAutoCoupon();
     } catch (err) {
@@ -119,6 +129,7 @@ export function ShopProvider({ children }) {
   };
 
   const toggleWishlist = async (productId) => {
+    if (isAdmin) return;
     if (!user) {
       router.push("/account?next=wishlist");
       return;
@@ -138,33 +149,30 @@ export function ShopProvider({ children }) {
     return coupon;
   };
 
-  const removeCoupon = () => {
-    setAppliedCoupon(null);
-  };
+  const removeCoupon = () => setAppliedCoupon(null);
 
-  const bagCount = useMemo(
-    () => bag.reduce((sum, item) => sum + item.quantity, 0),
-    [bag]
-  );
-
+  const bagCount = useMemo(() => bag.reduce((sum, item) => sum + item.quantity, 0), [bag]);
   const bagSubtotal = useMemo(
     () => bag.reduce((sum, item) => sum + item.price * item.quantity, 0),
     [bag]
   );
-
   const discountInr = appliedCoupon?.discountInr || 0;
 
   return (
     <ShopContext.Provider
       value={{
         user,
+        isAdmin,
+        isSuperAdmin,
         authLoading,
         refreshSession,
         logout,
         bag,
         wishlist,
-        isBagOpen,
-        setIsBagOpen,
+        isBagOpen: isAdmin ? false : isBagOpen,
+        setIsBagOpen: (open) => {
+          if (!isAdmin) setIsBagOpen(open);
+        },
         addToBag,
         updateQuantity,
         toggleWishlist,
@@ -186,8 +194,6 @@ export function ShopProvider({ children }) {
 
 export const useShop = () => {
   const context = useContext(ShopContext);
-  if (!context) {
-    throw new Error("useShop must be used within a ShopProvider");
-  }
+  if (!context) throw new Error("useShop must be used within a ShopProvider");
   return context;
 };

@@ -15,28 +15,29 @@ export function useLiveCatalog(params) {
   const queryKey = JSON.stringify(params);
 
   useEffect(() => {
-    let active = true;
+    const controller = new AbortController();
     setLoading(true);
 
     const timer = setTimeout(() => {
       api
-        .get("/products", { params })
+        .get("/products", { params, signal: controller.signal })
         .then(({ data }) => {
-          if (active && Array.isArray(data.data?.items)) {
+          if (Array.isArray(data.data?.items)) {
             setItems(data.data.items);
           }
         })
-        .catch(() => {
-          if (active) setItems(PRODUCTS);
+        .catch((err) => {
+          if (err.name === "CanceledError" || err.code === "ERR_CANCELED") return;
+          setItems(PRODUCTS);
         })
         .finally(() => {
-          if (active) setLoading(false);
+          if (!controller.signal.aborted) setLoading(false);
         });
-    }, 150);
+    }, 250);
 
     return () => {
-      active = false;
       clearTimeout(timer);
+      controller.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryKey]);
@@ -45,38 +46,65 @@ export function useLiveCatalog(params) {
 }
 
 /**
- * Debounced instant search hook for SearchOverlay.jsx (GET /api/v1/products/search).
+ * Debounced (400ms) backend search hook for SearchOverlay.jsx (GET /api/v1/products/search).
+ * Cancels stale in-flight requests automatically as the user types.
  */
-export function useLiveSearch(query, isOpen) {
+export function useLiveSearch(query, isOpen, debounceMs = 400) {
   const [matches, setMatches] = useState(PRODUCTS.slice(0, 4));
+  const [totalMatches, setTotalMatches] = useState(4);
+  const [isSearching, setIsSearching] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
-    let active = true;
+
+    const controller = new AbortController();
     const trimmed = query.trim();
+
+    if (trimmed) setIsSearching(true);
 
     const timer = setTimeout(() => {
       const req = trimmed
-        ? api.get("/products/search", { params: { q: trimmed, limit: 8 } })
-        : api.get("/products", { params: { limit: 4, sort: "featured" } });
+        ? api.get("/products/search", {
+            params: { q: trimmed, limit: 8 },
+            signal: controller.signal,
+          })
+        : api.get("/products", {
+            params: { limit: 4, sort: "featured" },
+            signal: controller.signal,
+          });
 
       req
         .then(({ data }) => {
-          if (!active) return;
-          const list = trimmed ? data.data?.matches : data.data?.items;
-          if (Array.isArray(list)) setMatches(list);
+          if (controller.signal.aborted) return;
+          if (trimmed) {
+            const list = Array.isArray(data.data?.matches) ? data.data.matches : [];
+            setMatches(list);
+            setTotalMatches(data.data?.totalMatches ?? list.length);
+          } else {
+            const list = Array.isArray(data.data?.items)
+              ? data.data.items
+              : PRODUCTS.slice(0, 4);
+            setMatches(list);
+            setTotalMatches(list.length);
+          }
         })
-        .catch(() => {
-          if (!active) return;
-          if (!trimmed) setMatches(PRODUCTS.slice(0, 4));
+        .catch((err) => {
+          if (err.name === "CanceledError" || err.code === "ERR_CANCELED") return;
+          if (!trimmed) {
+            setMatches(PRODUCTS.slice(0, 4));
+            setTotalMatches(4);
+          }
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setIsSearching(false);
         });
-    }, 150);
+    }, trimmed ? debounceMs : 0);
 
     return () => {
-      active = false;
       clearTimeout(timer);
+      controller.abort();
     };
-  }, [query, isOpen]);
+  }, [query, isOpen, debounceMs]);
 
-  return matches;
+  return { matches, totalMatches, isSearching };
 }

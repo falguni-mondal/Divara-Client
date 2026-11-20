@@ -1,21 +1,17 @@
 "use client";
 
-import React, {
-  useState,
-  useRef,
-  useEffect,
-  useMemo,
-  useCallback,
-} from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { X, ArrowUpRight, Search } from "lucide-react";
+import { X, ArrowUpRight, Search, Loader2 } from "lucide-react";
 import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
 import { TextLogo } from "@/components/ui/BrandLogo";
-import { PRODUCTS, formatINR } from "@/data/catalogData";
+import { formatINR } from "@/data/catalogData";
 import { useSmoothScroll } from "@/components/providers/SmoothScrollProvider";
 import { useSeasonAndYear } from "@/utils/season";
+import { useLiveSearch } from "@/hooks/useLiveCatalog";
+import { ikUrl } from "@/lib/imagekit";
 
 const QUICK_SUGGESTIONS = [
   "Kanjivaram",
@@ -47,7 +43,13 @@ export default function SearchOverlay({ isOpen, onClose }) {
   const { stopScroll, startScroll } = useSmoothScroll();
   const { currentSeason, seasonAndYear } = useSeasonAndYear();
 
-  // Lock background scroll and focus input when opened
+  // Debounced (400ms) backend search across all product fields
+  const { matches: matchedProducts, totalMatches, isSearching } = useLiveSearch(
+    query,
+    isOpen,
+    400
+  );
+
   useEffect(() => {
     if (isOpen) {
       stopScroll();
@@ -61,7 +63,6 @@ export default function SearchOverlay({ isOpen, onClose }) {
     return () => startScroll();
   }, [isOpen, stopScroll, startScroll]);
 
-  // Close on Escape key
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === "Escape" && isOpen) {
@@ -72,21 +73,6 @@ export default function SearchOverlay({ isOpen, onClose }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, onClose]);
 
-  // Live product filtering
-  const matchedProducts = useMemo(() => {
-    const trimmed = query.trim().toLowerCase();
-    if (!trimmed) return PRODUCTS.slice(0, 4);
-    return PRODUCTS.filter(
-      (p) =>
-        p.title.toLowerCase().includes(trimmed) ||
-        p.categoryLabel.toLowerCase().includes(trimmed) ||
-        p.season.toLowerCase().includes(trimmed) ||
-        p.fabric.toLowerCase().includes(trimmed) ||
-        p.color.toLowerCase().includes(trimmed)
-    );
-  }, [query]);
-
-  // Smooth modal open/close animation
   useGSAP(
     () => {
       if (!overlayRef.current || !panelRef.current) return;
@@ -101,12 +87,7 @@ export default function SearchOverlay({ isOpen, onClose }) {
         gsap.fromTo(
           panelRef.current,
           { y: -28, opacity: 0 },
-          {
-            y: 0,
-            opacity: 1,
-            duration: 0.5,
-            ease: "power4.out",
-          }
+          { y: 0, opacity: 1, duration: 0.5, ease: "power4.out" }
         );
       } else {
         gsap.to(overlayRef.current, {
@@ -120,7 +101,6 @@ export default function SearchOverlay({ isOpen, onClose }) {
     { dependencies: [isOpen] }
   );
 
-  // Stagger product results whenever matches update
   useGSAP(
     () => {
       if (!isOpen || !resultsGridRef.current) return;
@@ -143,7 +123,6 @@ export default function SearchOverlay({ isOpen, onClose }) {
     { dependencies: [matchedProducts, isOpen] }
   );
 
-  // Elastic SVG String Pluck Physics along the search bar baseline
   const pluckSearchString = useCallback((normX = 50, intensity = 1) => {
     if (!svgPathRef.current) return;
     const clampedX = Math.max(6, Math.min(94, normX));
@@ -167,7 +146,6 @@ export default function SearchOverlay({ isOpen, onClose }) {
     });
   }, []);
 
-  // Awwwards 3D Character Unfold + Neighbour Wave + Spring-Inertia Caret
   useEffect(() => {
     const nextLen = query.length;
     const isAddition = nextLen > prevLenRef.current;
@@ -179,12 +157,9 @@ export default function SearchOverlay({ isOpen, onClose }) {
       const boxEl = inputBoxRef.current;
       if (!trackEl || !caretEl || !boxEl) return;
 
-      const textWidth = measureSpanRef.current
-        ? measureSpanRef.current.offsetWidth
-        : 0;
+      const textWidth = measureSpanRef.current ? measureSpanRef.current.offsetWidth : 0;
       const availableWidth = Math.max(1, boxEl.clientWidth - 16);
 
-      // Keep cursor in view on narrow mobile screens when query is long
       const overflowX = Math.max(0, textWidth - availableWidth);
       gsap.to(trackEl, {
         x: -overflowX,
@@ -204,12 +179,7 @@ export default function SearchOverlay({ isOpen, onClose }) {
       gsap.fromTo(
         caretEl,
         { scaleY: 1.4 },
-        {
-          scaleY: 1,
-          duration: 0.35,
-          ease: "back.out(2.5)",
-          overwrite: "auto",
-        }
+        { scaleY: 1, duration: 0.35, ease: "back.out(2.5)", overwrite: "auto" }
       );
 
       const normX = Math.max(8, Math.min(92, (caretX / availableWidth) * 100));
@@ -222,13 +192,7 @@ export default function SearchOverlay({ isOpen, onClose }) {
         const lastChar = chars[chars.length - 1];
         gsap.fromTo(
           lastChar,
-          {
-            y: 18,
-            rotateX: -75,
-            scale: 0.7,
-            opacity: 0,
-            filter: "blur(4px)",
-          },
+          { y: 18, rotateX: -75, scale: 0.7, opacity: 0, filter: "blur(4px)" },
           {
             y: 0,
             rotateX: 0,
@@ -241,7 +205,6 @@ export default function SearchOverlay({ isOpen, onClose }) {
           }
         );
 
-        // Ripple wave across the previous 3 characters
         const waveCount = Math.min(3, chars.length - 1);
         for (let i = 1; i <= waveCount; i++) {
           const prevChar = chars[chars.length - 1 - i];
@@ -288,12 +251,10 @@ export default function SearchOverlay({ isOpen, onClose }) {
         if (e.target === overlayRef.current) onClose();
       }}
     >
-      {/* Light-Theme Responsive Search Box */}
       <div
         ref={panelRef}
-        className="w-full max-w-[1140px] bg-[#ffffff] text-[#1b1717] border-b sm:border border-[#1b1717]/15 shadow-2xl flex flex-col max-h-[100dvh] sm:max-h-[85dvh] overflow-hidden"
+        className="w-full max-w-[1140px] bg-[#ffffff] text-[#1b1717] border-b sm:border border-[#1b1717]/15 shadow-2xl flex flex-col max-h-[100svh] sm:max-h-[85svh] overflow-hidden"
       >
-        {/* Top Bar */}
         <div className="flex items-center justify-between px-4 sm:px-8 lg:px-10 py-3.5 sm:py-4 border-b border-[#1b1717]/10 shrink-0">
           <div className="flex items-center gap-3">
             <TextLogo className="w-[74px] sm:w-[84px]" fill="#1b1717" />
@@ -314,23 +275,23 @@ export default function SearchOverlay({ isOpen, onClose }) {
           </button>
         </div>
 
-        {/* Scrollable Content Body */}
         <div
           data-lenis-prevent
           className="flex-1 overflow-y-auto px-4 sm:px-8 lg:px-10 py-5 sm:py-8"
         >
-          {/* Awwwards Kinetic Search Input Stage */}
           <form onSubmit={handleSearchSubmit}>
             <div className="relative pb-3 sm:pb-4 border-b border-[#1b1717]/20">
               <div className="flex items-center gap-3 sm:gap-4">
-                <Search className="w-4 h-4 sm:w-5 sm:h-5 text-[#1b1717]/50 shrink-0" />
+                {isSearching ? (
+                  <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 text-[#5d100a] shrink-0 animate-spin" />
+                ) : (
+                  <Search className="w-4 h-4 sm:w-5 sm:h-5 text-[#1b1717]/50 shrink-0" />
+                )}
 
-                {/* Responsive Kinetic Input Box */}
                 <div
                   ref={inputBoxRef}
                   className="relative flex-1 flex items-center min-h-[38px] sm:min-h-[48px] lg:min-h-[54px] overflow-hidden"
                 >
-                  {/* Hidden Measurement Span */}
                   <span
                     ref={measureSpanRef}
                     className="invisible fixed -top-[9999px] left-0 whitespace-pre heading-serif text-lg sm:text-2xl md:text-3xl lg:text-[34px] font-normal tracking-wide"
@@ -338,14 +299,13 @@ export default function SearchOverlay({ isOpen, onClose }) {
                     {query}
                   </span>
 
-                  {/* Kinetic 3D Character Mirror + Spring-Physics Caret */}
                   <div
                     aria-hidden="true"
                     className="pointer-events-none absolute inset-0 flex items-center overflow-hidden"
                   >
                     {query.length === 0 && (
                       <span className="heading-serif text-base sm:text-2xl md:text-3xl lg:text-[32px] font-normal text-[#1b1717]/35 truncate select-none">
-                        Search sarees, silk, {currentSeason.toLowerCase()}...
+                        Search sarees, silk, SKU, {currentSeason.toLowerCase()}...
                       </span>
                     )}
 
@@ -364,7 +324,6 @@ export default function SearchOverlay({ isOpen, onClose }) {
                       ))}
                     </div>
 
-                    {/* Spring-Gliding Maroon Caret */}
                     <span
                       ref={caretRef}
                       style={{ opacity: isFocused ? 1 : 0 }}
@@ -372,7 +331,6 @@ export default function SearchOverlay({ isOpen, onClose }) {
                     />
                   </div>
 
-                  {/* Native Input (Transparent text, drives kinetic stage) */}
                   <input
                     ref={inputRef}
                     type="text"
@@ -385,7 +343,6 @@ export default function SearchOverlay({ isOpen, onClose }) {
                   />
                 </div>
 
-                {/* Clear & Submit Controls */}
                 <div className="flex items-center gap-2 sm:gap-3 shrink-0">
                   {query.length > 0 && (
                     <button
@@ -409,7 +366,6 @@ export default function SearchOverlay({ isOpen, onClose }) {
                 </div>
               </div>
 
-              {/* Elastic Plucked Silk-String SVG Baseline */}
               <svg
                 viewBox="0 0 100 20"
                 preserveAspectRatio="none"
@@ -427,7 +383,6 @@ export default function SearchOverlay({ isOpen, onClose }) {
               </svg>
             </div>
 
-            {/* Responsive Curated Quick Suggestions */}
             <div className="mt-4 flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
               <span className="text-[10px] uppercase tracking-[0.2em] text-[#1b1717]/45 shrink-0 mr-1">
                 Suggestions:
@@ -452,14 +407,13 @@ export default function SearchOverlay({ isOpen, onClose }) {
             </div>
           </form>
 
-          {/* Instant Matching Results Section */}
           <div className="mt-6 sm:mt-8 pt-5 sm:pt-6 border-t border-[#1b1717]/10">
             <div className="flex flex-wrap items-center justify-between gap-2 mb-4 sm:mb-5">
               <span className="text-[10px] sm:text-[11px] uppercase tracking-[0.2em] text-[#1b1717]/60 font-medium">
-                {query.trim()
-                  ? `${matchedProducts.length} ${
-                      matchedProducts.length === 1 ? "Result" : "Results"
-                    } for “${query}”`
+                {isSearching
+                  ? "Searching DIVARA Archive..."
+                  : query.trim()
+                  ? `${totalMatches} ${totalMatches === 1 ? "Result" : "Results"} for “${query}”`
                   : "Popular Curations"}
               </span>
 
@@ -477,34 +431,31 @@ export default function SearchOverlay({ isOpen, onClose }) {
               </Link>
             </div>
 
-            {matchedProducts.length === 0 ? (
+            {!isSearching && matchedProducts.length === 0 ? (
               <div className="py-10 sm:py-12 px-4 text-center border border-[#1b1717]/10">
                 <h3 className="heading-serif text-lg sm:text-xl font-normal text-[#1b1717]">
                   No outfits matched “{query}”
                 </h3>
                 <p className="mt-1.5 text-xs text-[#1b1717]/60 font-light max-w-md mx-auto">
                   Try searching by outfit type (Sarees, Dresses, Shirts, Denim),
-                  fabric (Silk, Velvet, Chanderi), or season.
+                  fabric (Silk, Velvet, Chanderi), color, SKU, or size.
                 </p>
               </div>
             ) : (
-              /* Responsive Results Grid:
-                 Mobile (<640px): Compact horizontal cards so they fit cleanly without excessive scrolling
-                 Tablet/Desktop (sm+): 2 to 4 column vertical editorial cards */
               <div
                 ref={resultsGridRef}
                 className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-5"
               >
-                {matchedProducts.slice(0, 4).map((product) => (
+                {matchedProducts.slice(0, 8).map((product) => (
                   <Link
-                    key={product.id}
+                    key={product.id || product._id}
                     href={`/shop/${product.slug}`}
                     onClick={onClose}
                     className="search-result-card group flex sm:flex-col items-center sm:items-stretch gap-3.5 sm:gap-0 p-2 sm:p-0 border sm:border-0 border-[#1b1717]/10 hover:border-[#1b1717]/30 transition-colors"
                   >
                     <div className="w-16 h-20 sm:w-full sm:h-auto sm:aspect-[3/4] shrink-0 overflow-hidden bg-[#1b1717]/5">
                       <img
-                        src={product.image}
+                        src={ikUrl(product.image, { width: 420 })}
                         alt={product.title}
                         className="w-full h-full object-cover"
                       />

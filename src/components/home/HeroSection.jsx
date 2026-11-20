@@ -11,6 +11,7 @@ import { useSeasonAndYear } from "@/utils/season";
 
 if (typeof window !== "undefined") {
   gsap.registerPlugin(ScrollTrigger);
+  ScrollTrigger.config({ ignoreMobileResize: true });
 }
 
 export default function HeroSection() {
@@ -105,7 +106,7 @@ export default function HeroSection() {
     <section
       ref={heroRef}
       id="hero-section"
-      className="w-full h-dvh relative flex flex-col items-center justify-between text-[#ffffff] overflow-hidden"
+      className="w-full h-svh relative flex flex-col items-center justify-between text-[#ffffff] overflow-hidden"
     >
       {/* Parallax Hero Background Image */}
       <picture

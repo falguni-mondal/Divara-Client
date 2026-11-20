@@ -40,7 +40,8 @@ body {
   background-color: #ffffff;
   color: var(--noir-black);
   font-family: var(--font-lato), sans-serif;
-  overflow-x: hidden;
+  /* overflow-x: clip prevents horizontal scroll without breaking position: sticky */
+  overflow-x: clip;
 }
 
 /* Serif font strictly for headings only */

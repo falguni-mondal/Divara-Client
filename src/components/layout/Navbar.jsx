@@ -28,14 +28,13 @@ function NavbarInner() {
   const [showNav, setShowNav] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const pathname = usePathname();
-  const { bagCount, setIsBagOpen } = useShop();
+  const { bagCount, setIsBagOpen, isAdmin } = useShop();
   const logoContainerRef = useRef(null);
 
   const navMenuController = () => {
     setShowNav((prev) => !prev);
   };
 
-  // Close mobile menu and search overlay automatically on route change
   useEffect(() => {
     setShowNav(false);
     setIsSearchOpen(false);
@@ -59,7 +58,6 @@ function NavbarInner() {
         return;
       }
 
-      // Immediately hide logo when entering Homepage Hero (even if coming from a scrolled footer)
       gsap.set(logoEl, { opacity: 0 });
 
       let logoTween = null;
@@ -104,7 +102,6 @@ function NavbarInner() {
 
   return (
     <>
-      {/* Background-free navbar across all screens using mix-blend-difference */}
       <header
         id="navbar-container"
         className="w-full fixed top-0 left-0 flex justify-center items-center z-[999] bg-transparent mix-blend-difference text-[#ffffff]"
@@ -113,7 +110,6 @@ function NavbarInner() {
           id="mobile-navbar"
           className="navbar w-full max-w-[1440px] flex justify-between items-center px-3 sm:px-6 lg:px-10 h-[45px] sm:h-[56px] bg-transparent"
         >
-          {/* Left: TextLogo — hidden on homepage hero, revealed on scroll */}
           <div
             ref={logoContainerRef}
             style={{ opacity: pathname === "/" ? 0 : 1 }}
@@ -124,7 +120,6 @@ function NavbarInner() {
             </Link>
           </div>
 
-          {/* Center: All Primary Navlinks directly on Navbar for PC */}
           <nav
             aria-label="Desktop Navigation"
             className="hidden lg:flex items-center gap-9 text-[12px] uppercase tracking-[0.14em] text-[#ffffff]"
@@ -140,7 +135,6 @@ function NavbarInner() {
             ))}
           </nav>
 
-          {/* Right: Icons + Mobile-Only Hamburger (Hidden on PC) */}
           <div className="nav-container flex gap-5 items-center">
             <nav className="flex gap-4 sm:gap-5 items-center text-[#ffffff]">
               <button
@@ -154,7 +148,7 @@ function NavbarInner() {
 
               <Link
                 href="/account"
-                aria-label="Account"
+                aria-label={isAdmin ? "Admin Console" : "Account"}
                 className="flex items-center"
               >
                 <User className="w-[18px] h-[18px] stroke-[1.5]" />
@@ -162,20 +156,21 @@ function NavbarInner() {
 
               <button
                 type="button"
-                onClick={() => setIsBagOpen(true)}
-                aria-label="Shopping Bag"
-                className="relative flex items-center cursor-pointer"
+                disabled={isAdmin}
+                onClick={() => !isAdmin && setIsBagOpen(true)}
+                aria-label={isAdmin ? "Shopping Bag disabled for Admin" : "Shopping Bag"}
+                title={isAdmin ? "Shopping Bag is disabled for Admin accounts" : "Shopping Bag"}
+                className={`relative flex items-center ${
+                  isAdmin ? "opacity-35 cursor-not-allowed" : "cursor-pointer"
+                }`}
               >
                 <ShoppingBag className="w-[18px] h-[18px] stroke-[1.5]" />
-                {bagCount > 0 && (
-                  <span className="ml-1 text-[10px] font-medium">
-                    ({bagCount})
-                  </span>
+                {!isAdmin && bagCount > 0 && (
+                  <span className="ml-1 text-[10px] font-medium">({bagCount})</span>
                 )}
               </button>
             </nav>
 
-            {/* Hamburger strictly hidden on PC (lg:hidden) */}
             <button
               type="button"
               onClick={navMenuController}
@@ -190,13 +185,8 @@ function NavbarInner() {
         </div>
       </header>
 
-      {/* Custom Animated Search Box Overlay */}
-      <SearchOverlay
-        isOpen={isSearchOpen}
-        onClose={() => setIsSearchOpen(false)}
-      />
+      <SearchOverlay isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
 
-      {/* Mobile-only luxury editorial menu */}
       <NavMenu
         showNav={showNav}
         navMenuController={navMenuController}

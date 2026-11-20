@@ -9,11 +9,13 @@ import { api, getApiErrorMessage } from "@/lib/api";
 import { formatINR } from "@/data/catalogData";
 import { ikUrl } from "@/lib/imagekit";
 import InteractiveInput from "@/components/ui/InteractiveInput";
+import { getStoredAttribution } from "@/components/analytics/UtmTracker";
 
 export default function CheckoutPage() {
   const router = useRouter();
   const {
     user,
+    isAdmin,
     authLoading,
     bag,
     bagSubtotal,
@@ -61,6 +63,7 @@ export default function CheckoutPage() {
       const { data } = await api.post("/checkout/session", {
         shippingAddress: shipping,
         couponCode: appliedCoupon?.code || null,
+        attribution: getStoredAttribution(),
       });
 
       const session = data.data;
@@ -86,7 +89,6 @@ export default function CheckoutPage() {
         });
         rzp.open();
       } else {
-        // Local dev fallback when Razorpay test keys are not yet configured
         setConfirmedOrder(session);
       }
     } catch (err) {
@@ -100,6 +102,28 @@ export default function CheckoutPage() {
     return (
       <div className="min-h-[60vh] pt-28 flex items-center justify-center text-xs uppercase tracking-widest text-[#1b1717]/60">
         Loading Checkout...
+      </div>
+    );
+  }
+
+  if (isAdmin) {
+    return (
+      <div className="min-h-[60vh] pt-28 px-4 flex flex-col items-center justify-center text-center">
+        <span className="text-[10px] uppercase tracking-[0.22em] text-[#5d100a] font-semibold">
+          Admin Mode Active
+        </span>
+        <h1 className="heading-serif text-2xl font-normal mt-2">
+          Checkout Disabled for Admin Accounts
+        </h1>
+        <p className="mt-2 text-xs text-[#1b1717]/65 max-w-sm">
+          Administrator accounts cannot place storefront orders. Manage orders directly from your Admin Console.
+        </p>
+        <Link
+          href="/account"
+          className="mt-6 px-7 py-3 bg-[#1b1717] text-[#ffffff] hover:bg-[#5d100a] text-xs uppercase tracking-widest font-semibold transition-colors"
+        >
+          Return to Admin Console
+        </Link>
       </div>
     );
   }
@@ -163,7 +187,6 @@ export default function CheckoutPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14">
-            {/* Shipping Form */}
             <form onSubmit={handleCheckout} className="lg:col-span-7 space-y-5">
               <h2 className="heading-serif text-xl font-normal border-b border-[#1b1717]/15 pb-3">
                 Shipping Details
@@ -246,7 +269,6 @@ export default function CheckoutPage() {
               </button>
             </form>
 
-            {/* Order Summary */}
             <aside className="lg:col-span-5 border border-[#1b1717]/15 p-6 h-fit space-y-5">
               <h2 className="heading-serif text-xl font-normal border-b border-[#1b1717]/15 pb-3">
                 Order Summary
