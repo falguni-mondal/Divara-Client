@@ -6,6 +6,7 @@ import Script from "next/script";
 import { useRouter } from "next/navigation";
 import { MapPin, Check } from "lucide-react";
 import { useShop } from "@/context/ShopContext";
+import { useSmoothScroll } from "@/components/providers/SmoothScrollProvider";
 import { api, getApiErrorMessage } from "@/lib/api";
 import { formatINR } from "@/data/catalogData";
 import ResponsiveImage from "@/components/ui/ResponsiveImage";
@@ -14,6 +15,7 @@ import { getStoredAttribution } from "@/components/analytics/UtmTracker";
 
 export default function CheckoutPage() {
   const router = useRouter();
+  const { scrollTo, refreshScroll } = useSmoothScroll();
   const {
     user,
     isAdmin,
@@ -43,6 +45,17 @@ export default function CheckoutPage() {
   const [verifying, setVerifying] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [confirmedOrder, setConfirmedOrder] = useState(null);
+
+  // Immediately scroll to top when entering verifying or confirmed state (works with Lenis + native scroll)
+  useEffect(() => {
+    if (!verifying && !confirmedOrder) return;
+    scrollTo(0, { immediate: true });
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    }
+    const t = setTimeout(() => refreshScroll(), 120);
+    return () => clearTimeout(t);
+  }, [verifying, confirmedOrder, scrollTo, refreshScroll]);
 
   const applyAddress = (addr, userEmail) => {
     setSelectedAddressId(addr._id);
@@ -230,7 +243,7 @@ export default function CheckoutPage() {
 
   if (confirmedOrder) {
     return (
-      <div className="min-h-[65vh] pt-28 px-4 max-w-xl mx-auto text-center">
+      <div className="min-h-[65vh] pt-36 pb-20 px-4 max-w-xl mx-auto text-center">
         <span className="text-xs uppercase tracking-[0.22em] text-[#5d100a] font-semibold">
           Order Confirmed
         </span>
@@ -441,7 +454,6 @@ export default function CheckoutPage() {
                   <span>Complimentary</span>
                 </div>
 
-                {/* Transparent CA-ready GST Breakdown inside Final MRP */}
                 <div className="pt-2 mt-2 border-t border-dashed border-[#1b1717]/15 space-y-1 text-[11px] text-[#1b1717]/65">
                   <div className="flex justify-between">
                     <span>Taxable Value (Excl. GST)</span>
