@@ -38,6 +38,7 @@ const SUPPORT_ITEMS = [
 ];
 
 const SOCIAL_ITEMS = [
+  { label: "Portfolio", href: "https://byfalguni.com" },
   { label: "Instagram", href: "https://instagram.com" },
   { label: "Github", href: "https://github.com" },
   { label: "LinkedIn", href: "https://linkedin.com" },

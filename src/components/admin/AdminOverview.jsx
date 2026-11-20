@@ -15,22 +15,19 @@ import {
 import { AlertTriangle, Link2, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatINR } from "@/data/catalogData";
-
-const RANGE_OPTIONS = [
-  { days: 7, label: "7 Days" },
-  { days: 30, label: "30 Days" },
-  { days: 90, label: "90 Days" },
-];
+import SmartDateRange, { getPresetRange } from "./SmartDateRange";
 
 export default function AdminOverview({ onOpenUtm }) {
-  const [days, setDays] = useState(30);
+  const [dateRange, setDateRange] = useState(() => getPresetRange("30d"));
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const loadOverview = useCallback(async (rangeDays) => {
+  const loadOverview = useCallback(async (range) => {
     setLoading(true);
     try {
-      const res = await api.get("/admin/overview", { params: { days: rangeDays } });
+      const res = await api.get("/admin/overview", {
+        params: { from: range.from, to: range.to },
+      });
       setData(res.data?.data || null);
     } catch {
       setData(null);
@@ -40,10 +37,12 @@ export default function AdminOverview({ onOpenUtm }) {
   }, []);
 
   useEffect(() => {
-    loadOverview(days);
-  }, [days, loadOverview]);
+    loadOverview(dateRange);
+  }, [dateRange, loadOverview]);
 
   const kpis = data?.kpis || {};
+  const spanDays = data?.range?.days || 30;
+
   const primaryCards = [
     {
       label: "Paid Revenue",
@@ -56,7 +55,7 @@ export default function AdminOverview({ onOpenUtm }) {
       sub: `Discounts given: ${formatINR(kpis.totalDiscountInr || 0)}`,
     },
     {
-      label: `Storefront Visits (${days}d)`,
+      label: `Storefront Visits (${spanDays}d)`,
       value: (kpis.totalVisits || 0).toLocaleString("en-IN"),
       sub: `${(kpis.uniqueVisitors || 0).toLocaleString("en-IN")} unique sessions`,
     },
@@ -73,44 +72,28 @@ export default function AdminOverview({ onOpenUtm }) {
     {
       label: "Atelier Operations",
       value: `${kpis.activeProducts || 0} Pieces`,
-      sub: `${kpis.openTickets || 0} open tickets • ${kpis.newsletterSubscribers || 0} subscribers`,
+      sub: `${kpis.openTickets || 0} open tickets • ${kpis.pendingReviews || 0} pending reviews`,
     },
   ];
 
   return (
-    <div className="space-y-8">
-      {/* Header + Range Selector */}
+    <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <span className="text-[10px] uppercase tracking-[0.22em] text-[#5d100a] font-semibold">
-            Atelier Telemetry & Attribution
+            Atelier Telemetry &amp; Attribution
           </span>
           <h1 className="heading-serif text-2xl sm:text-3xl font-normal mt-1">
             Executive Dashboard
           </h1>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {RANGE_OPTIONS.map((opt) => (
-            <button
-              key={opt.days}
-              type="button"
-              onClick={() => setDays(opt.days)}
-              className={`px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] border rounded-[2px] cursor-pointer transition-colors ${
-                days === opt.days
-                  ? "bg-[#1b1717] text-[#ffffff] border-[#1b1717]"
-                  : "border-[#1b1717]/20 text-[#1b1717]/75 hover:border-[#1b1717]"
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-
+        <div className="flex items-center gap-2">
           {onOpenUtm && (
             <button
               type="button"
               onClick={onOpenUtm}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-[#5d100a] text-[#ffffff] hover:bg-[#1b1717] text-[10px] uppercase tracking-[0.18em] font-semibold rounded-[2px] transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#5d100a] text-[#ffffff] hover:bg-[#1b1717] text-[10px] uppercase tracking-[0.18em] font-semibold rounded-[2px] transition-colors cursor-pointer"
             >
               <Link2 className="w-3.5 h-3.5" />
               <span>UTM Generator</span>
@@ -119,14 +102,17 @@ export default function AdminOverview({ onOpenUtm }) {
 
           <button
             type="button"
-            onClick={() => loadOverview(days)}
+            onClick={() => loadOverview(dateRange)}
             aria-label="Refresh Dashboard"
-            className="p-1.5 border border-[#1b1717]/20 hover:border-[#1b1717] rounded-[2px] cursor-pointer"
+            className="p-2 border border-[#1b1717]/20 hover:border-[#1b1717] rounded-[2px] cursor-pointer"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
           </button>
         </div>
       </div>
+
+      {/* Smart From/To Date Filter */}
+      <SmartDateRange from={dateRange.from} to={dateRange.to} onChange={setDateRange} />
 
       {/* KPI Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -143,12 +129,12 @@ export default function AdminOverview({ onOpenUtm }) {
         ))}
       </div>
 
-      {/* Charts Row: Daily Revenue & Visits Trend + Revenue by Category */}
+      {/* Charts */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
         <div className="xl:col-span-8 border border-[#1b1717]/15 p-5 bg-[#ffffff]">
           <div className="flex items-center justify-between mb-4">
             <h2 className="heading-serif text-lg font-normal">
-              Revenue & Visitor Trend ({days}d)
+              Revenue &amp; Visitor Trend ({dateRange.from} → {dateRange.to})
             </h2>
             <span className="text-[10px] uppercase tracking-[0.16em] text-[#1b1717]/50">
               Maroon: Revenue (₹) • Noir: Visits
@@ -200,16 +186,12 @@ export default function AdminOverview({ onOpenUtm }) {
         </div>
       </div>
 
-      {/* Traffic Sources & Top Referral Partners */}
+      {/* Traffic Sources & Top Referrers */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <div className="border border-[#1b1717]/15 p-5 bg-[#ffffff]">
-          <h2 className="heading-serif text-lg font-normal mb-4">
-            Top Traffic Sources ({days}d)
-          </h2>
+          <h2 className="heading-serif text-lg font-normal mb-4">Top Traffic Sources</h2>
           {(data?.trafficSources || []).length === 0 ? (
-            <p className="text-xs text-[#1b1717]/55">
-              No visits recorded yet. Share a UTM link from the UTM & Referrals tab to start tracking.
-            </p>
+            <p className="text-xs text-[#1b1717]/55">No visits recorded in this date range.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -241,13 +223,9 @@ export default function AdminOverview({ onOpenUtm }) {
         </div>
 
         <div className="border border-[#1b1717]/15 p-5 bg-[#ffffff]">
-          <h2 className="heading-serif text-lg font-normal mb-4">
-            Top Referral Partners ({days}d)
-          </h2>
+          <h2 className="heading-serif text-lg font-normal mb-4">Top Referral Partners</h2>
           {(data?.topReferrers || []).length === 0 ? (
-            <p className="text-xs text-[#1b1717]/55">
-              No person-specific referrals yet. Generate a link with a Referral Person tag (e.g., <code>utm_ref=ananya-roy</code>).
-            </p>
+            <p className="text-xs text-[#1b1717]/55">No person-specific referrals in this date range.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -279,12 +257,12 @@ export default function AdminOverview({ onOpenUtm }) {
         </div>
       </div>
 
-      {/* Bottom Row: Top Selling Products + Low Stock Alerts */}
+      {/* Top Selling Pieces + Low Stock Alerts */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <div className="border border-[#1b1717]/15 p-5 bg-[#ffffff]">
           <h2 className="heading-serif text-lg font-normal mb-4">Top Selling Pieces</h2>
           {(data?.topProducts || []).length === 0 ? (
-            <p className="text-xs text-[#1b1717]/55">No paid product sales recorded yet.</p>
+            <p className="text-xs text-[#1b1717]/55">No paid product sales in this date range.</p>
           ) : (
             <div className="divide-y divide-[#1b1717]/10">
               {data.topProducts.map((p) => (

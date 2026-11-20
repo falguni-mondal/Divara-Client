@@ -7,6 +7,7 @@ import React, {
   useMemo,
   useEffect,
   useCallback,
+  useRef,
 } from "react";
 import { useRouter } from "next/navigation";
 import { api, getApiErrorMessage } from "@/lib/api";
@@ -23,12 +24,23 @@ export function ShopProvider({ children }) {
   const [appliedCoupon, setAppliedCoupon] = useState(null);
   const [bagError, setBagError] = useState("");
 
+  const userRoleRef = useRef(null);
+  const appliedCouponRef = useRef(null);
+
+  useEffect(() => {
+    userRoleRef.current = user?.role || null;
+  }, [user?.role]);
+
+  useEffect(() => {
+    appliedCouponRef.current = appliedCoupon;
+  }, [appliedCoupon]);
+
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
   const isSuperAdmin =
     user?.role === "super_admin" && user?.email?.toLowerCase() === "admin@divara.com";
 
   const syncBagAndAutoCoupon = useCallback(async (roleOverride = null) => {
-    const role = roleOverride || user?.role;
+    const role = roleOverride || userRoleRef.current;
     if (role === "admin" || role === "super_admin") {
       setBag([]);
       setWishlist([]);
@@ -42,30 +54,45 @@ export function ShopProvider({ children }) {
       setBag(items);
       setWishlist(bagRes.data?.wishlist || []);
 
-      if (items.length > 0) {
-        const { data: autoRes } = await api.get("/coupons/auto");
-        setAppliedCoupon((prev) => {
-          if (prev && prev.applyMode === "MANUAL") return prev;
-          return autoRes.data?.coupon || null;
-        });
-      } else {
+      if (items.length === 0) {
         setAppliedCoupon(null);
+        return;
       }
+
+      // If a manual coupon is applied, re-validate it against the updated bag subtotal
+      const currentCoupon = appliedCouponRef.current;
+      if (currentCoupon && currentCoupon.applyMode === "MANUAL" && currentCoupon.code) {
+        try {
+          const { data: revalRes } = await api.post("/coupons/validate", {
+            code: currentCoupon.code,
+          });
+          setAppliedCoupon({ ...revalRes.data, applyMode: "MANUAL" });
+          return;
+        } catch {
+          // Manual coupon no longer qualifies (e.g. bag dropped below minOrderSubtotal)
+          setAppliedCoupon(null);
+        }
+      }
+
+      const { data: autoRes } = await api.get("/coupons/auto");
+      setAppliedCoupon(autoRes.data?.coupon || null);
     } catch {
       setBag([]);
       setWishlist([]);
       setAppliedCoupon(null);
     }
-  }, [user?.role]);
+  }, []);
 
   const refreshSession = useCallback(async () => {
     setAuthLoading(true);
     try {
       const { data } = await api.get("/auth/me");
       const fetchedUser = data.data?.user || null;
+      userRoleRef.current = fetchedUser?.role || null;
       setUser(fetchedUser);
       await syncBagAndAutoCoupon(fetchedUser?.role);
     } catch {
+      userRoleRef.current = null;
       setUser(null);
       setBag([]);
       setWishlist([]);
@@ -83,6 +110,7 @@ export function ShopProvider({ children }) {
     try {
       await api.post("/auth/logout");
     } finally {
+      userRoleRef.current = null;
       setUser(null);
       setBag([]);
       setWishlist([]);
@@ -137,8 +165,8 @@ export function ShopProvider({ children }) {
     try {
       const { data } = await api.post("/bag/wishlist/toggle", { productId });
       setWishlist(data.data?.wishlist || []);
-    } catch (err) {
-      console.error("Wishlist toggle error:", getApiErrorMessage(err));
+    } catch {
+      // Non-blocking wishlist toggle failure
     }
   };
 

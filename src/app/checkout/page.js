@@ -4,10 +4,11 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import Script from "next/script";
 import { useRouter } from "next/navigation";
+import { MapPin, Check } from "lucide-react";
 import { useShop } from "@/context/ShopContext";
 import { api, getApiErrorMessage } from "@/lib/api";
 import { formatINR } from "@/data/catalogData";
-import { ikUrl } from "@/lib/imagekit";
+import ResponsiveImage from "@/components/ui/ResponsiveImage";
 import InteractiveInput from "@/components/ui/InteractiveInput";
 import { getStoredAttribution } from "@/components/analytics/UtmTracker";
 
@@ -24,6 +25,9 @@ export default function CheckoutPage() {
     syncBagAndAutoCoupon,
   } = useShop();
 
+  const [savedAddresses, setSavedAddresses] = useState([]);
+  const [selectedAddressId, setSelectedAddressId] = useState(null);
+
   const [shipping, setShipping] = useState({
     fullName: "",
     email: "",
@@ -36,27 +40,63 @@ export default function CheckoutPage() {
     country: "India",
   });
   const [submitting, setSubmitting] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [confirmedOrder, setConfirmedOrder] = useState(null);
 
-  useEffect(() => {
-    if (user) {
-      setShipping((prev) => ({
-        ...prev,
-        fullName: prev.fullName || user.fullName || "",
-        email: prev.email || user.email || "",
-        phone: prev.phone || user.phone || "",
-      }));
-    }
-  }, [user]);
+  const applyAddress = (addr, userEmail) => {
+    setSelectedAddressId(addr._id);
+    setShipping({
+      fullName: addr.fullName || "",
+      email: userEmail || shipping.email || "",
+      phone: addr.phone || "",
+      line1: addr.line1 || "",
+      line2: addr.line2 || "",
+      city: addr.city || "",
+      state: addr.state || "",
+      postalCode: addr.postalCode || "",
+      country: addr.country || "India",
+    });
+  };
 
-  const taxableInr = Math.max(0, bagSubtotal - discountInr);
-  const gstInr = Math.round(taxableInr * 0.12);
-  const grandTotalInr = taxableInr + gstInr;
+  useEffect(() => {
+    if (!user || isAdmin) return;
+    setShipping((prev) => ({
+      ...prev,
+      fullName: prev.fullName || user.fullName || "",
+      email: prev.email || user.email || "",
+      phone: prev.phone || user.phone || "",
+    }));
+
+    api
+      .get("/auth/addresses")
+      .then(({ data }) => {
+        const list = data.data?.addresses || [];
+        setSavedAddresses(list);
+        const def = list.find((a) => a.isDefault) || list[0];
+        if (def) applyAddress(def, user.email);
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, isAdmin]);
+
+  // Final MRP is GST-Inclusive (12%). Intra-state West Bengal = CGST 6% + SGST 6%; Others = IGST 12%
+  const grandTotalInr = Math.max(0, bagSubtotal - discountInr);
+  const taxableBaseInr = Math.round(grandTotalInr / 1.12);
+  const totalGstInr = grandTotalInr - taxableBaseInr;
+  const isIntraState = shipping.state.trim().toLowerCase() === "west bengal";
+  const cgstInr = isIntraState ? Math.floor(totalGstInr / 2) : 0;
+  const sgstInr = isIntraState ? totalGstInr - cgstInr : 0;
 
   const handleCheckout = async (e) => {
     e.preventDefault();
     setErrorMsg("");
+
+    if (typeof window === "undefined" || !window.Razorpay) {
+      setErrorMsg("Payment gateway is still loading. Please wait a moment and try again.");
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -68,29 +108,72 @@ export default function CheckoutPage() {
 
       const session = data.data;
 
-      if (session.razorpayKeyId && typeof window !== "undefined" && window.Razorpay) {
-        const rzp = new window.Razorpay({
-          key: session.razorpayKeyId,
-          amount: session.amountPaise,
-          currency: session.currency,
-          name: "DIVARA",
-          description: `Order ${session.orderNumber}`,
-          order_id: session.razorpayOrderId,
-          prefill: {
-            name: shipping.fullName,
-            email: shipping.email,
-            contact: shipping.phone,
-          },
-          theme: { color: "#5d100a" },
-          handler: async () => {
-            setConfirmedOrder(session);
-            await syncBagAndAutoCoupon();
-          },
-        });
-        rzp.open();
-      } else {
-        setConfirmedOrder(session);
+      if (!session?.razorpayKeyId) {
+        setErrorMsg("Online payments are temporarily unavailable. Please try again shortly.");
+        return;
       }
+
+      const rzp = new window.Razorpay({
+        key: session.razorpayKeyId,
+        amount: session.amountPaise,
+        currency: session.currency,
+        name: "DIVARA",
+        description: `Order ${session.orderNumber}`,
+        order_id: session.razorpayOrderId,
+        method: {
+          upi: true,
+          card: true,
+          netbanking: true,
+          wallet: true,
+        },
+        prefill: {
+          name: shipping.fullName,
+          email: shipping.email,
+          contact: shipping.phone,
+        },
+        theme: { color: "#5d100a" },
+        handler: async (response) => {
+          setVerifying(true);
+          setErrorMsg("");
+          try {
+            await api.post("/checkout/verify", {
+              razorpayOrderId: response.razorpay_order_id,
+              razorpayPaymentId: response.razorpay_payment_id,
+              razorpaySignature: response.razorpay_signature,
+            });
+            setConfirmedOrder({ ...session, verified: true });
+            await syncBagAndAutoCoupon();
+          } catch (verifyErr) {
+            setErrorMsg(
+              getApiErrorMessage(
+                verifyErr,
+                "Payment was captured, but verification timed out. Please check My Account."
+              )
+            );
+          } finally {
+            setVerifying(false);
+          }
+        },
+      });
+
+      rzp.on("payment.failed", async (failResp) => {
+        const errObj = failResp?.error || {};
+        setErrorMsg(
+          errObj.description || "Payment was declined or cancelled. No amount was deducted."
+        );
+        try {
+          await api.post("/checkout/failure", {
+            razorpayOrderId: session.razorpayOrderId,
+            razorpayPaymentId: errObj.metadata?.payment_id || null,
+            reason: errObj.description || errObj.reason || "Payment failed",
+            code: errObj.code || "PAYMENT_FAILED",
+          });
+        } catch {
+          // Non-blocking
+        }
+      });
+
+      rzp.open();
     } catch (err) {
       setErrorMsg(getApiErrorMessage(err, "Unable to initiate checkout."));
     } finally {
@@ -98,10 +181,10 @@ export default function CheckoutPage() {
     }
   };
 
-  if (authLoading) {
+  if (authLoading || verifying) {
     return (
       <div className="min-h-[60vh] pt-28 flex items-center justify-center text-xs uppercase tracking-widest text-[#1b1717]/60">
-        Loading Checkout...
+        {verifying ? "Verifying Payment & Confirming Order..." : "Loading Checkout..."}
       </div>
     );
   }
@@ -149,13 +232,13 @@ export default function CheckoutPage() {
     return (
       <div className="min-h-[65vh] pt-28 px-4 max-w-xl mx-auto text-center">
         <span className="text-xs uppercase tracking-[0.22em] text-[#5d100a] font-semibold">
-          Order Initiated
+          Order Confirmed
         </span>
         <h1 className="heading-serif text-3xl font-normal mt-2">
           Thank You, {shipping.fullName}
         </h1>
         <p className="mt-3 text-sm text-[#1b1717]/75">
-          Order reference <strong>{confirmedOrder.orderNumber}</strong> has been created. Once payment confirmation completes, you will receive an email receipt from DIVARA.
+          Order reference <strong>{confirmedOrder.orderNumber}</strong> is confirmed and paid. A tax invoice receipt has been dispatched to <strong>{shipping.email}</strong>.
         </p>
         <button
           type="button"
@@ -170,7 +253,7 @@ export default function CheckoutPage() {
 
   return (
     <div className="w-full min-h-screen bg-[#ffffff] text-[#1b1717] pt-24 lg:pt-32 pb-20">
-      <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="lazyOnload" />
+      <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="afterInteractive" />
 
       <div className="max-w-[1280px] mx-auto px-[3vw] lg:px-10">
         <h1 className="heading-serif text-3xl sm:text-4xl font-normal mb-10">Checkout</h1>
@@ -188,6 +271,52 @@ export default function CheckoutPage() {
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14">
             <form onSubmit={handleCheckout} className="lg:col-span-7 space-y-5">
+              {savedAddresses.length > 0 && (
+                <div className="border border-[#1b1717]/15 p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-[0.2em] text-[#5d100a] font-semibold">
+                      <MapPin className="w-3.5 h-3.5" />
+                      <span>Quick-Fill Saved Address</span>
+                    </span>
+                    <Link
+                      href="/account"
+                      className="text-[10px] uppercase tracking-wider underline text-[#1b1717]/65 hover:text-[#5d100a]"
+                    >
+                      Manage Addresses
+                    </Link>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {savedAddresses.map((addr) => {
+                      const active = selectedAddressId === addr._id;
+                      return (
+                        <button
+                          key={addr._id}
+                          type="button"
+                          onClick={() => applyAddress(addr, user.email)}
+                          className={`text-left p-3 border transition-colors cursor-pointer ${
+                            active
+                              ? "border-[#5d100a] bg-[#5d100a]/[0.04]"
+                              : "border-[#1b1717]/15 hover:border-[#1b1717]"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] uppercase tracking-widest font-semibold text-[#5d100a]">
+                              {addr.label || "Saved"}
+                            </span>
+                            {active && <Check className="w-3.5 h-3.5 text-[#5d100a]" />}
+                          </div>
+                          <p className="text-xs font-medium mt-1 truncate">{addr.fullName}</p>
+                          <p className="text-[11px] text-[#1b1717]/65 truncate">
+                            {addr.line1}, {addr.city} - {addr.postalCode}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <h2 className="heading-serif text-xl font-normal border-b border-[#1b1717]/15 pb-3">
                 Shipping Details
               </h2>
@@ -271,16 +400,17 @@ export default function CheckoutPage() {
 
             <aside className="lg:col-span-5 border border-[#1b1717]/15 p-6 h-fit space-y-5">
               <h2 className="heading-serif text-xl font-normal border-b border-[#1b1717]/15 pb-3">
-                Order Summary
+                Order &amp; Tax Breakdown
               </h2>
 
               <div className="divide-y divide-[#1b1717]/10">
                 {bag.map((item) => (
                   <div key={`${item.id}-${item.size}`} className="py-3 flex items-center gap-3.5">
-                    <img
-                      src={ikUrl(item.image, { width: 140 })}
+                    <ResponsiveImage
+                      src={item.image}
                       alt={item.title}
-                      className="w-12 h-16 object-cover bg-[#1b1717]/5"
+                      preset="thumb"
+                      className="w-12 h-16 object-cover bg-[#1b1717]/5 shrink-0"
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{item.title}</p>
@@ -288,7 +418,7 @@ export default function CheckoutPage() {
                         Size {item.size} × {item.quantity}
                       </p>
                     </div>
-                    <span className="text-xs font-semibold">
+                    <span className="text-xs font-semibold shrink-0">
                       {formatINR(item.price * item.quantity)}
                     </span>
                   </div>
@@ -297,12 +427,12 @@ export default function CheckoutPage() {
 
               <div className="border-t border-[#1b1717]/15 pt-4 space-y-2 text-xs">
                 <div className="flex justify-between text-[#1b1717]/75">
-                  <span>Subtotal</span>
+                  <span>MRP Subtotal (Incl. of all taxes)</span>
                   <span>{formatINR(bagSubtotal)}</span>
                 </div>
                 {discountInr > 0 && (
                   <div className="flex justify-between text-[#5d100a] font-medium">
-                    <span>Discount ({appliedCoupon?.code})</span>
+                    <span>Coupon Discount ({appliedCoupon?.code})</span>
                     <span>-{formatINR(discountInr)}</span>
                   </div>
                 )}
@@ -310,10 +440,32 @@ export default function CheckoutPage() {
                   <span>Insured Shipping</span>
                   <span>Complimentary</span>
                 </div>
-                <div className="flex justify-between text-[#1b1717]/75">
-                  <span>GST (12%)</span>
-                  <span>{formatINR(gstInr)}</span>
+
+                {/* Transparent CA-ready GST Breakdown inside Final MRP */}
+                <div className="pt-2 mt-2 border-t border-dashed border-[#1b1717]/15 space-y-1 text-[11px] text-[#1b1717]/65">
+                  <div className="flex justify-between">
+                    <span>Taxable Value (Excl. GST)</span>
+                    <span>{formatINR(taxableBaseInr)}</span>
+                  </div>
+                  {isIntraState ? (
+                    <>
+                      <div className="flex justify-between">
+                        <span>CGST (6%)</span>
+                        <span>{formatINR(cgstInr)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>SGST (6%)</span>
+                        <span>{formatINR(sgstInr)}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex justify-between">
+                      <span>IGST (12%)</span>
+                      <span>{formatINR(totalGstInr)}</span>
+                    </div>
+                  )}
                 </div>
+
                 <div className="flex justify-between text-sm font-semibold pt-2 border-t border-[#1b1717]/15">
                   <span>Total Payable</span>
                   <span>{formatINR(grandTotalInr)}</span>

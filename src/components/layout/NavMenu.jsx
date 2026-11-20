@@ -19,7 +19,7 @@ export default function NavMenu({
   const menuRef = useRef(null);
   const tlRef = useRef(null);
   const { stopScroll, startScroll } = useSmoothScroll();
-  const { bagCount, setIsBagOpen } = useShop();
+  const { bagCount, setIsBagOpen, isAdmin } = useShop();
   const { seasonAndYear } = useSeasonAndYear();
 
   useEffect(() => {
@@ -108,7 +108,6 @@ export default function NavMenu({
       style={{ clipPath: "inset(0% 0% 100% 0%)", pointerEvents: "none" }}
       className="lg:hidden fixed inset-0 z-[9999] bg-[#1b1717] text-[#ffffff] flex flex-col justify-between px-5 sm:px-8 pb-8 pt-1"
     >
-      {/* Top Bar: Brand Logo & Minimal Close Button */}
       <div className="flex items-center justify-between h-[45px] sm:h-[56px] border-b border-[#ffffff]/10">
         <Link
           href="/"
@@ -134,7 +133,6 @@ export default function NavMenu({
         </button>
       </div>
 
-      {/* Center: Editorial Numbered Navigation Links */}
       <nav
         aria-label="Mobile Primary Navigation"
         className="my-auto py-8 divide-y divide-[#ffffff]/10 border-y border-[#ffffff]/10"
@@ -175,19 +173,26 @@ export default function NavMenu({
         })}
       </nav>
 
-      {/* Bottom: Quick Actions & Seasonal Stamp */}
       <div className="space-y-5">
         <div className="nav-menu-footer grid grid-cols-2 gap-3">
           <button
             type="button"
+            disabled={isAdmin}
+            aria-disabled={isAdmin}
+            title={isAdmin ? "Shopping bag disabled in Admin Mode" : "Open Shopping Bag"}
             onClick={() => {
+              if (isAdmin) return;
               navMenuController();
               setIsBagOpen(true);
             }}
-            className="flex items-center justify-center gap-2.5 border border-[#ffffff]/20 py-3 text-xs uppercase tracking-[0.18em] text-[#ffffff] hover:bg-[#ffffff] hover:text-[#1b1717] transition-colors cursor-pointer"
+            className={`flex items-center justify-center gap-2.5 border py-3 text-xs uppercase tracking-[0.18em] transition-colors ${
+              isAdmin
+                ? "border-[#ffffff]/10 text-[#ffffff]/35 cursor-not-allowed"
+                : "border-[#ffffff]/20 text-[#ffffff] hover:bg-[#ffffff] hover:text-[#1b1717] cursor-pointer"
+            }`}
           >
             <ShoppingBag className="w-4 h-4 stroke-[1.5]" />
-            <span>Bag ({bagCount})</span>
+            <span>{isAdmin ? "Bag (Admin)" : `Bag (${bagCount})`}</span>
           </button>
 
           <Link
@@ -196,7 +201,7 @@ export default function NavMenu({
             className="flex items-center justify-center gap-2.5 border border-[#ffffff]/20 py-3 text-xs uppercase tracking-[0.18em] text-[#ffffff] hover:bg-[#ffffff] hover:text-[#1b1717] transition-colors"
           >
             <User className="w-4 h-4 stroke-[1.5]" />
-            <span>Account</span>
+            <span>{isAdmin ? "Admin Console" : "Account"}</span>
           </Link>
         </div>
 

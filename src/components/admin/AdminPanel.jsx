@@ -1,10 +1,12 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, Suspense } from "react";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import {
   LayoutDashboard,
   Link2,
   ShoppingBag,
+  Boxes,
   Package,
   Tag,
   MessageSquare,
@@ -20,6 +22,7 @@ import { useShop } from "@/context/ShopContext";
 import AdminOverview from "./AdminOverview";
 import AdminUtmTab from "./AdminUtmTab";
 import AdminProductsTab from "./AdminProductsTab";
+import AdminInventoryTab from "./AdminInventoryTab";
 import AdminOrdersTab from "./AdminOrdersTab";
 import AdminCouponsTab from "./AdminCouponsTab";
 import AdminTicketsTab from "./AdminTicketsTab";
@@ -28,32 +31,40 @@ import AdminCmsTab from "./AdminCmsTab";
 import AdminLogsTab from "./AdminLogsTab";
 import AdminTeamTab from "./AdminTeamTab";
 
-export default function AdminPanel() {
+function AdminPanelInner() {
   const { user, isSuperAdmin, logout } = useShop();
-  const [activeTab, setActiveTab] = useState("overview");
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const navItems = [
     { id: "overview", label: "Overview", icon: LayoutDashboard },
     { id: "utm", label: "UTM & Referrals", icon: Link2 },
     { id: "products", label: "Products", icon: ShoppingBag },
+    { id: "inventory", label: "Inventory", icon: Boxes },
     { id: "orders", label: "Orders", icon: Package },
     { id: "coupons", label: "Coupons", icon: Tag },
     { id: "tickets", label: "Contact Tickets", icon: MessageSquare },
-    { id: "reviews", label: "Reviews & Seeding", icon: Star },
-    { id: "cms", label: "CMS & Policies", icon: FileText },
+    { id: "reviews", label: "Reviews & Approval", icon: Star },
+    { id: "cms", label: "Smart CMS", icon: FileText },
     { id: "logs", label: "Audit Logs", icon: ScrollText },
     ...(isSuperAdmin ? [{ id: "team", label: "Add Admin", icon: UserPlus }] : []),
   ];
 
+  const requestedTab = searchParams.get("tab") || "overview";
+  const activeTab = navItems.some((n) => n.id === requestedTab) ? requestedTab : "overview";
+
   const handleSelectTab = (id) => {
-    setActiveTab(id);
+    const params = new URLSearchParams();
+    if (id !== "overview") params.set("tab", id);
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
     setMobileNavOpen(false);
   };
 
   return (
     <div className="w-full min-h-svh bg-[#ffffff] text-[#1b1717] pt-[56px] lg:pt-[64px] flex items-start">
-      {/* Desktop Sticky Full-Height Sidebar */}
       <aside className="hidden lg:flex flex-col justify-between w-64 shrink-0 border-r border-[#1b1717]/15 self-start sticky top-[64px] h-[calc(100svh-64px)] bg-[#ffffff] px-5 py-6">
         <div className="overflow-y-auto pr-1">
           <div className="pb-5 mb-5 border-b border-[#1b1717]/15">
@@ -98,7 +109,6 @@ export default function AdminPanel() {
         </div>
       </aside>
 
-      {/* Mobile Compact Non-Fullscreen Admin Drawer */}
       {mobileNavOpen && (
         <div
           onClick={() => setMobileNavOpen(false)}
@@ -179,9 +189,10 @@ export default function AdminPanel() {
           </span>
         </div>
 
-        {activeTab === "overview" && <AdminOverview onOpenUtm={() => setActiveTab("utm")} />}
+        {activeTab === "overview" && <AdminOverview onOpenUtm={() => handleSelectTab("utm")} />}
         {activeTab === "utm" && <AdminUtmTab />}
         {activeTab === "products" && <AdminProductsTab />}
+        {activeTab === "inventory" && <AdminInventoryTab />}
         {activeTab === "orders" && <AdminOrdersTab />}
         {activeTab === "coupons" && <AdminCouponsTab />}
         {activeTab === "tickets" && <AdminTicketsTab />}
@@ -191,5 +202,13 @@ export default function AdminPanel() {
         {activeTab === "team" && isSuperAdmin && <AdminTeamTab />}
       </main>
     </div>
+  );
+}
+
+export default function AdminPanel() {
+  return (
+    <Suspense fallback={<div className="min-h-svh bg-[#ffffff]" />}>
+      <AdminPanelInner />
+    </Suspense>
   );
 }

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Star, Upload, X, Trash2, CheckCircle2, CornerDownRight } from "lucide-react";
+import { Star, Upload, X, Trash2, CheckCircle2, CornerDownRight, Lock } from "lucide-react";
 import { api, getApiErrorMessage } from "@/lib/api";
 import { uploadReviewImageToImageKit, ikUrl } from "@/lib/imagekit";
 import { useShop } from "@/context/ShopContext";
@@ -22,13 +22,19 @@ function ReviewReplyNode({
   depth = 0,
 }) {
   const children = allReplies.filter((r) => r.parentReplyId === reply.id);
-  const isAdmin = reply.authorRole === "admin";
+  const isAdmin = reply.authorRole === "admin" || reply.authorRole === "super_admin";
   const isReplyingHere =
     activeReplyBox?.reviewId === reviewId &&
     activeReplyBox?.parentReplyId === reply.id;
 
   return (
-    <div className={`mt-3 ${depth > 0 ? "ml-4 sm:ml-7 pl-3.5 border-l border-[#1b1717]/15" : "pl-4 border-l-2 border-[#1b1717]/15"}`}>
+    <div
+      className={`mt-3 ${
+        depth > 0
+          ? "ml-4 sm:ml-7 pl-3.5 border-l border-[#1b1717]/15"
+          : "pl-4 border-l-2 border-[#1b1717]/15"
+      }`}
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2 text-[11px]">
           <span className="font-semibold text-[#1b1717]">{reply.authorName}</span>
@@ -42,7 +48,7 @@ function ReviewReplyNode({
           </span>
         </div>
 
-        {user && (reply.userId === user.id || user.role === "admin") && (
+        {user && (reply.userId === user.id || user.role === "admin" || user.role === "super_admin") && (
           <button
             type="button"
             onClick={() => onDeleteReply(reviewId, reply.id)}
@@ -119,12 +125,13 @@ function ReviewReplyNode({
 }
 
 export default function ProductReviews({ productSlug }) {
-  const { user } = useShop();
+  const { user, isAdmin } = useShop();
   const [summary, setSummary] = useState({
     averageRating: 0,
     totalReviews: 0,
     breakdown: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
   });
+  const [eligibility, setEligibility] = useState({ canReview: false, reason: "NOT_LOGGED_IN" });
   const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -136,7 +143,6 @@ export default function ProductReviews({ productSlug }) {
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
-  const [successMsg, setSuccessMsg] = useState("");
   const [lightboxUrl, setLightboxUrl] = useState(null);
 
   const [activeReplyBox, setActiveReplyBox] = useState(null);
@@ -148,6 +154,7 @@ export default function ProductReviews({ productSlug }) {
     try {
       const { data } = await api.get(`/reviews/${productSlug}`);
       if (data.data?.summary) setSummary(data.data.summary);
+      if (data.data?.eligibility) setEligibility(data.data.eligibility);
       setReviews(data.data?.reviews || []);
     } catch {
       setReviews([]);
@@ -158,7 +165,16 @@ export default function ProductReviews({ productSlug }) {
 
   useEffect(() => {
     fetchReviews();
-  }, [fetchReviews]);
+  }, [fetchReviews, user?.id]);
+
+  useEffect(() => {
+    if (!lightboxUrl) return;
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") setLightboxUrl(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [lightboxUrl]);
 
   const handleImageSelect = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -176,11 +192,9 @@ export default function ProductReviews({ productSlug }) {
     setUploading(true);
 
     try {
-      const uploaded = [];
-      for (const file of toUpload) {
-        const res = await uploadReviewImageToImageKit(file);
-        uploaded.push(res);
-      }
+      const uploaded = await Promise.all(
+        toUpload.map((file) => uploadReviewImageToImageKit(file))
+      );
       setImages((prev) => [...prev, ...uploaded].slice(0, 3));
     } catch (err) {
       setErrorMsg(err.message || "Image upload failed.");
@@ -192,7 +206,6 @@ export default function ProductReviews({ productSlug }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErrorMsg("");
-    setSuccessMsg("");
     setSubmitting(true);
 
     try {
@@ -206,7 +219,6 @@ export default function ProductReviews({ productSlug }) {
       setComment("");
       setRating(5);
       setImages([]);
-      setSuccessMsg("Your review has been published.");
       await fetchReviews();
     } catch (err) {
       setErrorMsg(getApiErrorMessage(err, "Unable to publish review."));
@@ -216,6 +228,7 @@ export default function ProductReviews({ productSlug }) {
   };
 
   const handleDeleteReview = async (reviewId) => {
+    setErrorMsg("");
     try {
       await api.delete(`/reviews/item/${reviewId}`);
       await fetchReviews();
@@ -227,6 +240,7 @@ export default function ProductReviews({ productSlug }) {
   const handlePostReply = async (e, reviewId, parentReplyId) => {
     e.preventDefault();
     if (!replyText.trim()) return;
+    setErrorMsg("");
     setPostingReply(true);
     try {
       await api.post(`/reviews/${reviewId}/replies`, {
@@ -244,6 +258,7 @@ export default function ProductReviews({ productSlug }) {
   };
 
   const handleDeleteReply = async (reviewId, replyId) => {
+    setErrorMsg("");
     try {
       await api.delete(`/reviews/${reviewId}/replies/${replyId}`);
       await fetchReviews();
@@ -313,6 +328,12 @@ export default function ProductReviews({ productSlug }) {
         </div>
 
         <div className="lg:col-span-8 space-y-10">
+          {errorMsg && (
+            <div className="p-3 bg-[#5d100a]/5 border border-[#5d100a]/25 text-xs text-[#5d100a]">
+              {errorMsg}
+            </div>
+          )}
+
           <div className="border border-[#1b1717]/15 p-6 sm:p-8 bg-[#ffffff]">
             <h3 className="heading-serif text-lg sm:text-xl font-normal mb-4">
               Write a Review
@@ -321,28 +342,43 @@ export default function ProductReviews({ productSlug }) {
             {!user ? (
               <div className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <p className="text-xs text-[#1b1717]/70">
-                  Please sign in to your DIVARA account to rate this garment, upload up to 3 photos, or reply to reviews.
+                  Sign in with your DIVARA account to review pieces you have purchased and received.
                 </p>
                 <Link
                   href="/account"
                   className="shrink-0 px-5 py-2.5 bg-[#1b1717] text-[#ffffff] hover:bg-[#5d100a] text-[11px] uppercase tracking-widest font-semibold transition-colors text-center"
                 >
-                  Sign In to Review
+                  Sign In
                 </Link>
+              </div>
+            ) : isAdmin || eligibility.reason === "ADMIN_DISABLED" ? (
+              <div className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-[#1b1717]/60">
+                <span className="inline-flex items-center gap-2">
+                  <Lock className="w-4 h-4 text-[#5d100a] shrink-0" />
+                  <span>
+                    Storefront review submission is disabled for Admin accounts. Use the Admin Panel to seed reviews.
+                  </span>
+                </span>
+                <Link
+                  href="/account?tab=reviews"
+                  className="shrink-0 text-[10px] uppercase tracking-widest font-semibold text-[#5d100a] underline"
+                >
+                  Open Reviews Console
+                </Link>
+              </div>
+            ) : eligibility.reason === "ALREADY_REVIEWED" ? (
+              <p className="text-xs text-[#1b1717]/65">
+                You have already shared a review for this garment.
+              </p>
+            ) : !eligibility.canReview ? (
+              <div className="py-3 flex items-center gap-2.5 text-xs text-[#1b1717]/65">
+                <Lock className="w-4 h-4 text-[#1b1717]/45 shrink-0" />
+                <span>
+                  Verified buyer reviews unlock once you purchase this piece and your order status is marked Delivered.
+                </span>
               </div>
             ) : (
               <form onSubmit={handleSubmit} className="space-y-4">
-                {errorMsg && (
-                  <div className="p-3 bg-[#5d100a]/5 border border-[#5d100a]/25 text-xs text-[#5d100a]">
-                    {errorMsg}
-                  </div>
-                )}
-                {successMsg && (
-                  <div className="p-3 bg-[#1b1717]/5 border border-[#1b1717]/20 text-xs text-[#1b1717]">
-                    {successMsg}
-                  </div>
-                )}
-
                 <div>
                   <span className="block text-[11px] uppercase tracking-widest text-[#1b1717]/65 mb-2">
                     Your Rating *
@@ -420,7 +456,9 @@ export default function ProductReviews({ productSlug }) {
                         />
                         <button
                           type="button"
-                          onClick={() => setImages((prev) => prev.filter((i) => i.fileId !== img.fileId))}
+                          onClick={() =>
+                            setImages((prev) => prev.filter((i) => i.fileId !== img.fileId))
+                          }
                           aria-label="Remove image"
                           className="absolute top-0.5 right-0.5 bg-[#1b1717]/80 text-[#ffffff] p-0.5 cursor-pointer"
                         >
@@ -451,7 +489,7 @@ export default function ProductReviews({ productSlug }) {
                   disabled={submitting || uploading}
                   className="px-7 py-2.5 bg-[#1b1717] text-[#ffffff] hover:bg-[#5d100a] text-xs uppercase tracking-widest font-semibold transition-colors cursor-pointer disabled:opacity-50"
                 >
-                  {submitting ? "Publishing..." : "Publish Review"}
+                  {submitting ? "Submitting..." : "Publish Review"}
                 </button>
               </form>
             )}
@@ -461,7 +499,7 @@ export default function ProductReviews({ productSlug }) {
             <p className="text-xs text-[#1b1717]/55">Loading reviews...</p>
           ) : reviews.length === 0 ? (
             <p className="text-xs text-[#1b1717]/60">
-              No reviews yet for this garment. Be the first to share your impressions.
+              No reviews yet for this garment.
             </p>
           ) : (
             <div className="divide-y divide-[#1b1717]/15 border-t border-[#1b1717]/15">
@@ -540,7 +578,6 @@ export default function ProductReviews({ productSlug }) {
                       </div>
                     )}
 
-                    {/* Top-Level Reply Trigger */}
                     {user && (
                       <div className="mt-3">
                         <button
@@ -582,7 +619,6 @@ export default function ProductReviews({ productSlug }) {
                       </form>
                     )}
 
-                    {/* Recursive Nested Replies */}
                     {topReplies.length > 0 && (
                       <div className="mt-4">
                         {topReplies.map((reply) => (
@@ -613,12 +649,22 @@ export default function ProductReviews({ productSlug }) {
 
       {lightboxUrl && (
         <div
+          data-lenis-prevent
           onClick={() => setLightboxUrl(null)}
           className="fixed inset-0 z-[1100] bg-black/80 flex items-center justify-center p-4"
         >
+          <button
+            type="button"
+            onClick={() => setLightboxUrl(null)}
+            aria-label="Close image preview"
+            className="absolute top-5 right-5 p-2 bg-[#ffffff]/10 hover:bg-[#ffffff]/25 text-[#ffffff] rounded-full cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
           <img
             src={ikUrl(lightboxUrl, { width: 1200 })}
             alt="Review photo full size"
+            onClick={(e) => e.stopPropagation()}
             className="max-h-[85vh] max-w-[90vw] object-contain"
           />
         </div>

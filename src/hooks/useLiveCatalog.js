@@ -2,38 +2,40 @@
 
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
-import { PRODUCTS } from "@/data/catalogData";
 
 /**
- * Fetches live filtered catalog items from GET /api/v1/products (MongoDB $facet)
- * with graceful fallback to local PRODUCTS if the server is offline during dev.
+ * Fetches live filtered catalog items from GET /api/v1/products (MongoDB $facet).
+ * Starts empty with loading=true so pages render shimmer skeletons cleanly without fake dummy items.
  */
 export function useLiveCatalog(params) {
-  const [items, setItems] = useState(PRODUCTS);
-  const [loading, setLoading] = useState(false);
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const queryKey = JSON.stringify(params);
+  const queryKey = JSON.stringify(params || {});
 
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
+    setError("");
 
     const timer = setTimeout(() => {
       api
         .get("/products", { params, signal: controller.signal })
         .then(({ data }) => {
-          if (Array.isArray(data.data?.items)) {
-            setItems(data.data.items);
+          if (!controller.signal.aborted) {
+            setItems(Array.isArray(data.data?.items) ? data.data.items : []);
           }
         })
         .catch((err) => {
           if (err.name === "CanceledError" || err.code === "ERR_CANCELED") return;
-          setItems(PRODUCTS);
+          setItems([]);
+          setError("Unable to load collection right now. Please refresh.");
         })
         .finally(() => {
           if (!controller.signal.aborted) setLoading(false);
         });
-    }, 250);
+    }, 150);
 
     return () => {
       clearTimeout(timer);
@@ -42,7 +44,7 @@ export function useLiveCatalog(params) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryKey]);
 
-  return { items, loading };
+  return { items, loading, error };
 }
 
 /**
@@ -50,8 +52,8 @@ export function useLiveCatalog(params) {
  * Cancels stale in-flight requests automatically as the user types.
  */
 export function useLiveSearch(query, isOpen, debounceMs = 400) {
-  const [matches, setMatches] = useState(PRODUCTS.slice(0, 4));
-  const [totalMatches, setTotalMatches] = useState(4);
+  const [matches, setMatches] = useState([]);
+  const [totalMatches, setTotalMatches] = useState(0);
   const [isSearching, setIsSearching] = useState(false);
 
   useEffect(() => {
@@ -60,7 +62,7 @@ export function useLiveSearch(query, isOpen, debounceMs = 400) {
     const controller = new AbortController();
     const trimmed = query.trim();
 
-    if (trimmed) setIsSearching(true);
+    setIsSearching(true);
 
     const timer = setTimeout(() => {
       const req = trimmed
@@ -81,19 +83,15 @@ export function useLiveSearch(query, isOpen, debounceMs = 400) {
             setMatches(list);
             setTotalMatches(data.data?.totalMatches ?? list.length);
           } else {
-            const list = Array.isArray(data.data?.items)
-              ? data.data.items
-              : PRODUCTS.slice(0, 4);
+            const list = Array.isArray(data.data?.items) ? data.data.items : [];
             setMatches(list);
             setTotalMatches(list.length);
           }
         })
         .catch((err) => {
           if (err.name === "CanceledError" || err.code === "ERR_CANCELED") return;
-          if (!trimmed) {
-            setMatches(PRODUCTS.slice(0, 4));
-            setTotalMatches(4);
-          }
+          setMatches([]);
+          setTotalMatches(0);
         })
         .finally(() => {
           if (!controller.signal.aborted) setIsSearching(false);

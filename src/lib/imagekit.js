@@ -3,13 +3,32 @@ import { api } from "./api";
 const IK_ENDPOINT = (process.env.NEXT_PUBLIC_IMAGEKIT_URL_ENDPOINT || "").replace(/\/$/, "");
 const IK_PUBLIC_KEY = process.env.NEXT_PUBLIC_IMAGEKIT_PUBLIC_KEY || "";
 
-export function ikUrl(src, { width = 900, quality = 80 } = {}) {
+export function isImageKitUrl(src) {
+  return Boolean(src && typeof src === "string" && src.includes("ik.imagekit.io"));
+}
+
+/**
+ * Dynamically transforms ImageKit URLs with width, optional height, quality,
+ * c-at_max (never upscales), and f-auto (AVIF/WebP).
+ */
+export function ikUrl(src, { width = 800, height = null, quality = 80 } = {}) {
   if (!src) return "";
-  if (src.startsWith("/") || !src.includes("ik.imagekit.io")) {
-    return src;
-  }
-  const sep = src.includes("?") ? "&" : "?";
-  return `${src}${sep}tr=w-${width},q-${quality},f-auto`;
+  if (!isImageKitUrl(src)) return src;
+
+  const clean = src.split("?")[0];
+  const parts = [`w-${width}`];
+  if (height) parts.push(`h-${height}`);
+  parts.push("c-at_max", `q-${quality}`, "f-auto");
+  return `${clean}?tr=${parts.join(",")}`;
+}
+
+/**
+ * Generates an HTML responsive srcSet string for ImageKit assets so mobile,
+ * tablet, and desktop screens each download the exact optimal resolution.
+ */
+export function ikSrcSet(src, widths = [320, 480, 640, 960, 1280], quality = 80) {
+  if (!isImageKitUrl(src)) return undefined;
+  return widths.map((w) => `${ikUrl(src, { width: w, quality })} ${w}w`).join(", ");
 }
 
 async function uploadToImageKit({ file, authEndpoint, folder, prefix }) {
@@ -68,4 +87,13 @@ export function uploadAdminImageToImageKit(file, folder = "/divara/products") {
     folder,
     prefix: "divara",
   });
+}
+
+export async function deleteAdminImageFromImageKit(fileId) {
+  if (!fileId) return;
+  try {
+    await api.delete(`/media/${encodeURIComponent(fileId)}`);
+  } catch {
+    // Non-blocking cleanup
+  }
 }

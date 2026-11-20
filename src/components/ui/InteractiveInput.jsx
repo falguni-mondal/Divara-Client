@@ -3,25 +3,8 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import gsap from "gsap";
 
-/**
- * Awwwards-Level Kinetic Input Engine (Preserves 100% Original Input UI)
- *
- * Keeps the exact original visual layout for:
- * - "contact": Standard bordered input / textarea on Contact Us page
- * - "account": Compact 3rem floating-label box (Email* / Password*) on Account page
- * - "footer":  Minimal bottom-border newsletter input with inline Join button in Footer
- *
- * Awwwards Typing Micro-Interactions (Zero UI Clutter):
- * 1. 3D Silk-Ink Character Reveal & Neighbour Kerning Wave: Each typed character
- *    unfolds in 3D (y, rotateX, blur -> crisp) while rippling adjacent characters.
- * 2. Spring-Inertia Gliding Caret: A custom 1.5px caret glides smoothly with
- *    spring physics (`gsap.quickTo`) instead of snapping like a native caret.
- * 3. Elastic SVG Plucked-String Baseline: Every keystroke plucks an SVG Bezier
- *    string along the bottom border at the exact caret X coordinate, vibrating
- *    with `elastic.out(1.35, 0.22)` physics.
- */
 export default function InteractiveInput({
-  variant = "contact", // "contact" | "account" | "footer"
+  variant = "contact",
   as = "input",
   type = "text",
   label = "",
@@ -35,166 +18,168 @@ export default function InteractiveInput({
   className = "",
 }) {
   const [isFocused, setIsFocused] = useState(false);
+  const [caretIndex, setCaretIndex] = useState(String(value ?? "").length);
 
   const wrapperRef = useRef(null);
   const inputRef = useRef(null);
   const mirrorTrackRef = useRef(null);
   const caretRef = useRef(null);
   const svgPathRef = useRef(null);
-  const measureSpanRef = useRef(null);
-  const prevLenRef = useRef(String(value).length);
+  const measurePrefixRef = useRef(null);
+  const measureFullRef = useRef(null);
+  const prevLenRef = useRef(String(value ?? "").length);
 
   const strValue = String(value ?? "");
-  const displayChars =
-    type === "password" ? "•".repeat(strValue.length) : strValue;
+  const displayChars = type === "password" ? "•".repeat(strValue.length) : strValue;
+  const safeCaretIdx = Math.max(0, Math.min(displayChars.length, caretIndex));
+  const prefixChars = displayChars.slice(0, safeCaretIdx);
 
-  // Pluck the bottom SVG Bezier string at normalized X (0..100)
-  const pluckString = useCallback(
-    (normX = 50, intensity = 1) => {
-      if (!svgPathRef.current) return;
-      const clampedX = Math.max(8, Math.min(92, normX));
-      const peakY = 10 + Math.min(9, 5.5 * intensity);
+  // Use text + inputMode="email" so browsers expose selectionStart on email fields for arrow-key cursor tracking
+  const nativeType = type === "email" ? "text" : type;
+  const nativeInputMode = type === "email" ? "email" : undefined;
 
-      const proxy = { y: peakY, x: clampedX };
-      gsap.killTweensOf(proxy);
+  const pluckString = useCallback((normX = 50, intensity = 1) => {
+    if (!svgPathRef.current) return;
+    const clampedX = Math.max(8, Math.min(92, normX));
+    const peakY = 10 + Math.min(9, 5.5 * intensity);
 
-      gsap.to(proxy, {
-        y: 10,
-        duration: 0.85,
-        ease: "elastic.out(1.35, 0.22)",
-        onUpdate: () => {
-          if (svgPathRef.current) {
-            svgPathRef.current.setAttribute(
-              "d",
-              `M 0 10 Q ${proxy.x.toFixed(1)} ${proxy.y.toFixed(2)} 100 10`
-            );
-          }
-        },
-      });
-    },
-    []
-  );
+    const proxy = { y: peakY, x: clampedX };
+    gsap.killTweensOf(proxy);
 
-  // Update spring-gliding caret position & trigger character wave
+    gsap.to(proxy, {
+      y: 10,
+      duration: 0.85,
+      ease: "elastic.out(1.35, 0.22)",
+      onUpdate: () => {
+        if (svgPathRef.current) {
+          svgPathRef.current.setAttribute(
+            "d",
+            `M 0 10 Q ${proxy.x.toFixed(1)} ${proxy.y.toFixed(2)} 100 10`
+          );
+        }
+      },
+    });
+  }, []);
+
+  const readNativeCaret = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    try {
+      if (typeof el.selectionStart === "number") {
+        setCaretIndex(el.selectionStart);
+      }
+    } catch {
+      setCaretIndex(el.value.length);
+    }
+  }, []);
+
   const syncCaretAndAnimateChar = useCallback(
-    (isAddition = false) => {
+    (isAddition = false, shouldPluck = false) => {
       if (as === "textarea") return;
       const trackEl = mirrorTrackRef.current;
       const caretEl = caretRef.current;
       const boxEl = wrapperRef.current;
       if (!trackEl || !caretEl || !boxEl) return;
 
-      const chars = trackEl.querySelectorAll(".k-char");
-      const lastCharEl = chars.length > 0 ? chars[chars.length - 1] : null;
+      const prefixWidth = measurePrefixRef.current ? measurePrefixRef.current.offsetWidth : 0;
+      const fullWidth = measureFullRef.current ? measureFullRef.current.offsetWidth : 0;
+      const boxWidth = Math.max(1, boxEl.clientWidth - 40);
 
-      // Measure width of text to position gliding caret
-      const textWidth = measureSpanRef.current
-        ? measureSpanRef.current.offsetWidth
-        : 0;
-      const boxWidth = Math.max(1, boxEl.clientWidth - 36);
+      // Keep the active caret visible inside the input viewport even when arrowing through long text
+      let scrollOffset = 0;
+      if (fullWidth > boxWidth) {
+        if (prefixWidth > boxWidth) {
+          scrollOffset = prefixWidth - boxWidth;
+        }
+      }
 
-      // Horizontal auto-scroll if text exceeds visible input width
-      const overflowX = Math.max(0, textWidth - boxWidth);
       gsap.to(trackEl, {
-        x: -overflowX,
-        duration: 0.22,
+        x: -scrollOffset,
+        duration: 0.18,
         ease: "power3.out",
         overwrite: "auto",
       });
 
-      const caretX = Math.min(boxWidth, textWidth);
+      const caretX = Math.max(0, Math.min(boxWidth, prefixWidth - scrollOffset));
       gsap.to(caretEl, {
         x: caretX,
-        duration: 0.22,
+        duration: 0.14,
         ease: "power3.out",
         overwrite: "auto",
       });
 
-      // Elastic vertical stretch on caret during typing
-      gsap.fromTo(
-        caretEl,
-        { scaleY: 1.45 },
-        {
-          scaleY: 1,
-          duration: 0.35,
-          ease: "back.out(2.5)",
-          overwrite: "auto",
-        }
-      );
-
-      // Pluck SVG string at caret X %
-      const normX = Math.max(10, Math.min(90, (caretX / boxWidth) * 100));
-      pluckString(normX, isAddition ? 1.15 : 0.75);
-
-      // 3D Silk-Ink Reveal on newly typed character + micro-wave on preceding 3 chars
-      if (isAddition && lastCharEl) {
+      if (shouldPluck) {
         gsap.fromTo(
-          lastCharEl,
-          {
-            y: 11,
-            rotateX: -70,
-            scale: 0.72,
-            opacity: 0,
-            filter: "blur(3px)",
-          },
+          caretEl,
+          { scaleY: 1.4 },
+          { scaleY: 1, duration: 0.3, ease: "back.out(2.5)", overwrite: "auto" }
+        );
+        const normX = Math.max(10, Math.min(90, (caretX / boxWidth) * 100));
+        pluckString(normX, isAddition ? 1.15 : 0.75);
+      }
+
+      const chars = trackEl.querySelectorAll(".k-char");
+      const typedCharIdx = Math.max(0, safeCaretIdx - 1);
+      const targetChar = chars[typedCharIdx];
+
+      if (isAddition && targetChar) {
+        gsap.fromTo(
+          targetChar,
+          { y: 10, rotateX: -70, scale: 0.75, opacity: 0, filter: "blur(3px)" },
           {
             y: 0,
             rotateX: 0,
             scale: 1,
             opacity: 1,
             filter: "blur(0px)",
-            duration: 0.38,
+            duration: 0.36,
             ease: "expo.out",
             overwrite: "auto",
           }
         );
-
-        // Subtle wave on neighboring 3 characters
-        const neighborCount = Math.min(3, chars.length - 1);
-        for (let i = 1; i <= neighborCount; i++) {
-          const neighbor = chars[chars.length - 1 - i];
-          if (neighbor) {
-            gsap.fromTo(
-              neighbor,
-              { y: -2.5 * (1 - i * 0.25) },
-              {
-                y: 0,
-                duration: 0.42,
-                delay: i * 0.025,
-                ease: "elastic.out(1.2, 0.4)",
-                overwrite: "auto",
-              }
-            );
-          }
-        }
       }
     },
-    [as, pluckString]
+    [as, pluckString, safeCaretIdx]
   );
 
+  // Sync on value change
   useEffect(() => {
     const nextLen = strValue.length;
     const isAddition = nextLen > prevLenRef.current;
+    const changed = nextLen !== prevLenRef.current;
     prevLenRef.current = nextLen;
 
     if (as === "textarea") {
-      if (nextLen > 0) {
+      if (changed && nextLen > 0) {
         const normX = 15 + ((nextLen * 7) % 70);
         pluckString(normX, isAddition ? 1 : 0.6);
       }
       return;
     }
 
+    readNativeCaret();
     requestAnimationFrame(() => {
-      syncCaretAndAnimateChar(isAddition);
+      syncCaretAndAnimateChar(isAddition, changed);
     });
-  }, [strValue, as, syncCaretAndAnimateChar, pluckString]);
+  }, [strValue, as, readNativeCaret, syncCaretAndAnimateChar, pluckString]);
+
+  // Sync whenever caret moves via ArrowLeft / ArrowRight / Home / End / Click
+  useEffect(() => {
+    if (as === "textarea") return;
+    requestAnimationFrame(() => {
+      syncCaretAndAnimateChar(false, false);
+    });
+  }, [safeCaretIdx, as, syncCaretAndAnimateChar]);
 
   const handleChange = (e) => {
     if (onChange) onChange(e);
+    requestAnimationFrame(readNativeCaret);
   };
 
-  // Elastic SVG Baseline String Overlay
+  const handleCursorEvent = () => {
+    requestAnimationFrame(readNativeCaret);
+  };
+
   const renderElasticString = (strokeColor) => (
     <svg
       viewBox="0 0 100 20"
@@ -214,15 +199,20 @@ export default function InteractiveInput({
     </svg>
   );
 
-  // Kinetic Mirror + Gliding Caret Layer for single-line inputs
   const renderKineticMirror = (textClass, placeholderClass, caretColor) => (
     <div
       aria-hidden="true"
       className="pointer-events-none absolute inset-0 flex items-center overflow-hidden"
     >
-      {/* Hidden span for exact pixel width measurement */}
+      {/* Hidden measurement spans for exact caret X and full string width */}
       <span
-        ref={measureSpanRef}
+        ref={measurePrefixRef}
+        className={`invisible fixed -top-[9999px] left-0 whitespace-pre ${textClass}`}
+      >
+        {prefixChars}
+      </span>
+      <span
+        ref={measureFullRef}
         className={`invisible fixed -top-[9999px] left-0 whitespace-pre ${textClass}`}
       >
         {displayChars}
@@ -250,7 +240,6 @@ export default function InteractiveInput({
           ))}
         </div>
 
-        {/* Spring-Physics Gliding Caret */}
         <span
           ref={caretRef}
           style={{ opacity: isFocused && !disabled ? 1 : 0 }}
@@ -260,7 +249,19 @@ export default function InteractiveInput({
     </div>
   );
 
-  // 1. ACCOUNT PAGE ORIGINAL UI VARIANT
+  const commonInputEvents = {
+    onChange: handleChange,
+    onKeyDown: handleCursorEvent,
+    onKeyUp: handleCursorEvent,
+    onClick: handleCursorEvent,
+    onSelect: handleCursorEvent,
+    onFocus: () => {
+      setIsFocused(true);
+      handleCursorEvent();
+    },
+    onBlur: () => setIsFocused(false),
+  };
+
   if (variant === "account") {
     return (
       <div
@@ -284,13 +285,12 @@ export default function InteractiveInput({
 
           <input
             ref={inputRef}
-            type={type}
+            type={nativeType}
+            inputMode={nativeInputMode}
             value={strValue}
-            onChange={handleChange}
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
             required={required}
             disabled={disabled}
+            {...commonInputEvents}
             className={`relative z-10 w-full outline-0 border-0 text-[4.5vw] sm:text-xs bg-transparent text-transparent caret-transparent selection:bg-[#5d100a]/20 ${
               rightSlot ? "pr-10" : ""
             }`}
@@ -298,9 +298,7 @@ export default function InteractiveInput({
         </div>
 
         {rightSlot && (
-          <div className="absolute right-3 top-1/2 -translate-y-1/2 z-20">
-            {rightSlot}
-          </div>
+          <div className="absolute right-3 top-1/2 -translate-y-1/2 z-20">{rightSlot}</div>
         )}
 
         {renderElasticString("#5d100a")}
@@ -308,7 +306,6 @@ export default function InteractiveInput({
     );
   }
 
-  // 2. FOOTER NEWSLETTER ORIGINAL UI VARIANT
   if (variant === "footer") {
     return (
       <div
@@ -324,13 +321,12 @@ export default function InteractiveInput({
 
           <input
             ref={inputRef}
-            type={type}
+            type={nativeType}
+            inputMode={nativeInputMode}
             value={strValue}
-            onChange={handleChange}
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
             required={required}
             aria-label={placeholder || "Email Address"}
+            {...commonInputEvents}
             className="relative z-10 w-full bg-transparent text-[3.2vw] sm:text-xs tracking-wider text-transparent caret-transparent outline-none selection:bg-[#ffffff]/25"
           />
         </div>
@@ -341,7 +337,6 @@ export default function InteractiveInput({
     );
   }
 
-  // 3. CONTACT PAGE ORIGINAL UI VARIANT (Default: input or textarea)
   return (
     <div className={`w-full ${className}`}>
       {label && (
@@ -378,13 +373,12 @@ export default function InteractiveInput({
 
               <input
                 ref={inputRef}
-                type={type}
+                type={nativeType}
+                inputMode={nativeInputMode}
                 required={required}
                 disabled={disabled}
                 value={strValue}
-                onChange={handleChange}
-                onFocus={() => setIsFocused(true)}
-                onBlur={() => setIsFocused(false)}
+                {...commonInputEvents}
                 className="relative z-10 w-full bg-transparent text-xs sm:text-sm text-transparent caret-transparent outline-none selection:bg-[#5d100a]/20"
               />
             </div>

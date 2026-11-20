@@ -3,9 +3,12 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
+import UrlPagination, { useUrlPageParam } from "./UrlPagination";
 
 export default function AdminLogsTab() {
+  const [page, setPage] = useUrlPageParam("page");
   const [logs, setLogs] = useState([]);
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const [loading, setLoading] = useState(true);
   const [emailFilter, setEmailFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
@@ -15,18 +18,20 @@ export default function AdminLogsTab() {
     try {
       const { data } = await api.get("/admin/logs", {
         params: {
+          page,
+          limit: 25,
           ...(emailFilter.trim() ? { email: emailFilter.trim() } : {}),
           ...(statusFilter !== "ALL" ? { status: statusFilter } : {}),
-          limit: 150,
         },
       });
       setLogs(data.data?.logs || []);
+      if (data.data?.pagination) setPagination(data.data.pagination);
     } catch {
       setLogs([]);
     } finally {
       setLoading(false);
     }
-  }, [emailFilter, statusFilter]);
+  }, [page, emailFilter, statusFilter]);
 
   useEffect(() => {
     fetchLogs();
@@ -40,7 +45,7 @@ export default function AdminLogsTab() {
             Security &amp; Accountability
           </span>
           <h1 className="heading-serif text-2xl sm:text-3xl font-normal mt-1">
-            Admin Audit Logs
+            Admin Audit Logs ({pagination.total})
           </h1>
         </div>
 
@@ -58,13 +63,19 @@ export default function AdminLogsTab() {
         <input
           type="text"
           value={emailFilter}
-          onChange={(e) => setEmailFilter(e.target.value)}
+          onChange={(e) => {
+            setEmailFilter(e.target.value);
+            setPage(1);
+          }}
           placeholder="Filter by admin email..."
-          className="border border-[#1b1717]/25 px-3.5 py-2 text-xs outline-none focus:border-[#5d100a] min-w-[220px]"
+          className="border border-[#1b1717]/25 px-3.5 py-2 text-xs outline-none focus:border-[#5d100a] w-full sm:w-64"
         />
         <select
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
+          onChange={(e) => {
+            setStatusFilter(e.target.value);
+            setPage(1);
+          }}
           className="border border-[#1b1717]/25 px-3.5 py-2 text-xs uppercase tracking-wider outline-none focus:border-[#5d100a] bg-[#ffffff]"
         >
           <option value="ALL">All Statuses</option>
@@ -73,7 +84,7 @@ export default function AdminLogsTab() {
         </select>
       </div>
 
-      <div className="border border-[#1b1717]/15 overflow-x-auto">
+      <div className="border border-[#1b1717]/15 overflow-x-auto bg-[#ffffff]">
         <table className="w-full text-left border-collapse text-xs">
           <thead>
             <tr className="bg-[#1b1717] text-[#ffffff] text-[10px] uppercase tracking-widest">
@@ -133,6 +144,13 @@ export default function AdminLogsTab() {
           </tbody>
         </table>
       </div>
+
+      <UrlPagination
+        page={page}
+        totalPages={pagination.totalPages}
+        totalItems={pagination.total}
+        onPageChange={setPage}
+      />
     </div>
   );
 }

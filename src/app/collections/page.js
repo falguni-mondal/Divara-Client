@@ -7,9 +7,11 @@ import { SlidersHorizontal, ChevronDown, X, Check } from "lucide-react";
 import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { PRODUCTS, FILTER_OPTIONS, formatINR } from "@/data/catalogData";
+import { FILTER_OPTIONS, formatINR } from "@/data/catalogData";
+import { useLiveCatalog } from "@/hooks/useLiveCatalog";
 import { useSeasonAndYear } from "@/utils/season";
 import { useSmoothScroll } from "@/components/providers/SmoothScrollProvider";
+import ResponsiveImage from "@/components/ui/ResponsiveImage";
 
 if (typeof window !== "undefined") {
   gsap.registerPlugin(ScrollTrigger);
@@ -22,8 +24,8 @@ const SORT_OPTIONS = [
   { id: "name-asc", label: "Alphabetical: A–Z" },
 ];
 
-const MIN_PRICE_LIMIT = 10000;
-const MAX_PRICE_LIMIT = 70000;
+const MIN_PRICE_LIMIT = 0;
+const MAX_PRICE_LIMIT = 150000;
 const PRICE_STEP = 1000;
 
 function normalizeSeasonParam(param) {
@@ -60,24 +62,18 @@ function CollectionsContent() {
   const { currentSeason, seasonAndYear } = useSeasonAndYear();
   const { refreshScroll, scrollTo } = useSmoothScroll();
 
-  // Sync filters when URL query parameters (?category=..., ?season=..., ?q=...) change
-  useEffect(() => {
-    const cat = searchParams.get("category");
-    const seas = searchParams.get("season");
-    const q = searchParams.get("q");
+  const { items: liveProducts, loading: catalogLoading } = useLiveCatalog({
+    limit: 100,
+    sort: "featured",
+  });
 
-    if (cat) {
-      setSelectedCategory(cat);
-    }
-    if (seas) {
-      setSelectedSeason(normalizeSeasonParam(seas));
-    }
-    if (q !== null) {
-      setSearchQuery(q);
-    }
+  // Always sync and reset when URL query parameters change (including clearing back to /collections)
+  useEffect(() => {
+    setSelectedCategory(searchParams.get("category") || "all");
+    setSelectedSeason(normalizeSeasonParam(searchParams.get("season")));
+    setSearchQuery(searchParams.get("q") || "");
   }, [searchParams]);
 
-  // Close custom sort dropdown on outside click
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (sortRef.current && !sortRef.current.contains(event.target)) {
@@ -145,17 +141,17 @@ function CollectionsContent() {
     ((maxPrice - MIN_PRICE_LIMIT) / (MAX_PRICE_LIMIT - MIN_PRICE_LIMIT)) * 100;
 
   const filteredProducts = useMemo(() => {
-    let list = [...PRODUCTS];
+    let list = Array.isArray(liveProducts) ? [...liveProducts] : [];
 
     if (searchQuery.trim() !== "") {
       const q = searchQuery.trim().toLowerCase();
       list = list.filter(
         (p) =>
-          p.title.toLowerCase().includes(q) ||
-          p.categoryLabel.toLowerCase().includes(q) ||
-          p.season.toLowerCase().includes(q) ||
-          p.fabric.toLowerCase().includes(q) ||
-          p.color.toLowerCase().includes(q)
+          (p.title || "").toLowerCase().includes(q) ||
+          (p.categoryLabel || p.category || "").toLowerCase().includes(q) ||
+          (p.season || "").toLowerCase().includes(q) ||
+          (p.fabric || "").toLowerCase().includes(q) ||
+          (p.color || "").toLowerCase().includes(q)
       );
     }
     if (selectedCategory !== "all") {
@@ -165,27 +161,34 @@ function CollectionsContent() {
       list = list.filter((p) => p.season === selectedSeason);
     }
     if (selectedColor !== "All") {
-      list = list.filter((p) => p.color === selectedColor);
+      list = list.filter(
+        (p) => (p.color || "").toLowerCase() === selectedColor.toLowerCase()
+      );
     }
     if (selectedFabric !== "All") {
-      list = list.filter((p) => p.fabric === selectedFabric);
+      list = list.filter(
+        (p) => (p.fabric || "").toLowerCase() === selectedFabric.toLowerCase()
+      );
     }
     if (selectedSize !== "All") {
-      list = list.filter((p) => p.sizes.includes(selectedSize));
+      list = list.filter((p) => (p.sizes || []).includes(selectedSize));
     }
 
-    list = list.filter((p) => p.price >= minPrice && p.price <= maxPrice);
+    list = list.filter(
+      (p) => (p.price || 0) >= minPrice && (p.price || 0) <= maxPrice
+    );
 
     if (sortBy === "price-asc") {
-      list.sort((a, b) => a.price - b.price);
+      list.sort((a, b) => (a.price || 0) - (b.price || 0));
     } else if (sortBy === "price-desc") {
-      list.sort((a, b) => b.price - a.price);
+      list.sort((a, b) => (b.price || 0) - (a.price || 0));
     } else if (sortBy === "name-asc") {
-      list.sort((a, b) => a.title.localeCompare(b.title));
+      list.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
     }
 
     return list;
   }, [
+    liveProducts,
     searchQuery,
     selectedCategory,
     selectedSeason,
@@ -258,6 +261,7 @@ function CollectionsContent() {
 
   useGSAP(
     () => {
+      if (catalogLoading) return;
       const cards = pageRef.current?.querySelectorAll(".product-card-item");
       if (!cards || cards.length === 0) return;
 
@@ -268,7 +272,7 @@ function CollectionsContent() {
           y: 0,
           opacity: 1,
           duration: 0.8,
-          stagger: 0.08,
+          stagger: 0.06,
           ease: "power3.out",
           overwrite: "auto",
           clearProps: "transform",
@@ -280,7 +284,7 @@ function CollectionsContent() {
         }
       );
     },
-    { scope: pageRef, dependencies: [filteredProducts] }
+    { scope: pageRef, dependencies: [filteredProducts, catalogLoading] }
   );
 
   const currentSortLabel =
@@ -288,7 +292,6 @@ function CollectionsContent() {
 
   return (
     <div ref={pageRef} className="w-full min-h-screen bg-[#ffffff] text-[#1b1717]">
-      {/* Page Hero Banner with Parallax Background & Season Filter CTA */}
       <section className="relative w-full h-[50vh] lg:h-[56vh] overflow-hidden flex items-end">
         <picture
           ref={heroBgRef}
@@ -313,7 +316,6 @@ function CollectionsContent() {
             </h1>
           </div>
 
-          {/* Collection Hero Season Filter CTA */}
           <div className="catalog-header-reveal">
             <button
               type="button"
@@ -330,14 +332,11 @@ function CollectionsContent() {
         </div>
       </section>
 
-      {/* Main Catalog Container */}
       <section
         ref={catalogSectionRef}
         className="catalog-main-section max-w-[1440px] mx-auto px-[3vw] lg:px-10 py-8 lg:py-12"
       >
-        {/* Top Bar: Left Filter Button & Right Custom Sort Dropdown */}
         <div className="catalog-bar-reveal flex items-center justify-between border-y border-[#1b1717]/15 py-3.5 gap-4">
-          {/* Left: Custom Filter Toggle Button */}
           <div className="flex items-center gap-3 flex-wrap">
             <button
               type="button"
@@ -382,13 +381,14 @@ function CollectionsContent() {
             )}
           </div>
 
-          {/* Center Count on Desktop */}
           <span className="hidden md:inline-block text-xs uppercase tracking-widest text-[#1b1717]/60">
-            {filteredProducts.length}{" "}
-            {filteredProducts.length === 1 ? "Item" : "Items"}
+            {catalogLoading
+              ? "Loading..."
+              : `${filteredProducts.length} ${
+                  filteredProducts.length === 1 ? "Item" : "Items"
+                }`}
           </span>
 
-          {/* Right: Custom Sort Dropdown */}
           <div ref={sortRef} className="relative">
             <button
               type="button"
@@ -404,7 +404,6 @@ function CollectionsContent() {
               />
             </button>
 
-            {/* Custom Sort Menu */}
             <div
               className={`absolute right-0 top-full mt-2 w-52 bg-[#ffffff] border border-[#1b1717]/20 shadow-lg z-30 transition-all duration-200 origin-top-right ${
                 isSortOpen
@@ -440,7 +439,6 @@ function CollectionsContent() {
           </div>
         </div>
 
-        {/* Custom Expandable Multi-Filter Panel */}
         <div
           className={`grid transition-[grid-template-rows,opacity] duration-400 ease-in-out ${
             isFilterOpen
@@ -450,7 +448,6 @@ function CollectionsContent() {
         >
           <div className="overflow-hidden">
             <div className="py-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6">
-              {/* 1. Outfit Type */}
               <div>
                 <h3 className="heading-serif text-xs uppercase tracking-widest text-[#1b1717]/60 mb-3 font-semibold">
                   Outfit Type
@@ -473,7 +470,6 @@ function CollectionsContent() {
                 </div>
               </div>
 
-              {/* 2. Season */}
               <div>
                 <h3 className="heading-serif text-xs uppercase tracking-widest text-[#1b1717]/60 mb-3 font-semibold">
                   Season
@@ -496,7 +492,6 @@ function CollectionsContent() {
                 </div>
               </div>
 
-              {/* 3. Color */}
               <div>
                 <h3 className="heading-serif text-xs uppercase tracking-widest text-[#1b1717]/60 mb-3 font-semibold">
                   Color
@@ -525,7 +520,6 @@ function CollectionsContent() {
                 </div>
               </div>
 
-              {/* 4. Fabric */}
               <div>
                 <h3 className="heading-serif text-xs uppercase tracking-widest text-[#1b1717]/60 mb-3 font-semibold">
                   Fabric
@@ -548,7 +542,6 @@ function CollectionsContent() {
                 </div>
               </div>
 
-              {/* 5. Size */}
               <div>
                 <h3 className="heading-serif text-xs uppercase tracking-widest text-[#1b1717]/60 mb-3 font-semibold">
                   Size
@@ -571,7 +564,6 @@ function CollectionsContent() {
                 </div>
               </div>
 
-              {/* 6. Custom Min & Max Price Range Slider */}
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="heading-serif text-xs uppercase tracking-widest text-[#1b1717]/60 font-semibold">
@@ -591,18 +583,14 @@ function CollectionsContent() {
                   )}
                 </div>
 
-                {/* Live Min & Max Readout */}
                 <div className="flex items-center justify-between text-xs font-medium text-[#1b1717] mb-3">
                   <span>{formatINR(minPrice)}</span>
                   <span className="text-[#1b1717]/40">—</span>
                   <span>{formatINR(maxPrice)}</span>
                 </div>
 
-                {/* Dual-Thumb Range Slider Track */}
                 <div className="relative h-6 flex items-center">
-                  {/* Base Track */}
                   <div className="w-full h-[3px] bg-[#1b1717]/15 relative rounded-full">
-                    {/* Active Maroon Fill Bar */}
                     <div
                       style={{
                         left: `${minPercent}%`,
@@ -612,7 +600,6 @@ function CollectionsContent() {
                     />
                   </div>
 
-                  {/* Min Range Input */}
                   <input
                     type="range"
                     min={MIN_PRICE_LIMIT}
@@ -624,7 +611,6 @@ function CollectionsContent() {
                     className="price-range-thumb pointer-events-none absolute inset-0 w-full h-full appearance-none bg-transparent outline-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#5d100a] [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-[#ffffff] [&::-webkit-slider-thumb]:shadow [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:h-3.5 [&::-moz-range-thumb]:w-3.5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-[#5d100a] [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-[#ffffff] [&::-moz-range-thumb]:cursor-pointer"
                   />
 
-                  {/* Max Range Input */}
                   <input
                     type="range"
                     min={MIN_PRICE_LIMIT}
@@ -671,9 +657,21 @@ function CollectionsContent() {
           </div>
         </div>
 
-        {/* Product Grid: Normal 2, lg: 3, xl: 4, 2xl: 5 (No top-left tags, no parallax/unzoom on product images) */}
         <div className="catalog-grid-container">
-          {filteredProducts.length === 0 ? (
+          {catalogLoading ? (
+            <div className="mt-8 grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-[3vw] sm:gap-x-5 lg:gap-x-6 gap-y-8 lg:gap-y-10">
+              {Array.from({ length: 8 }).map((_, idx) => (
+                <div key={idx} className="flex flex-col">
+                  <div className="w-full aspect-[3/4] bg-[#1b1717]/[0.07] animate-pulse" />
+                  <div className="mt-3 space-y-2">
+                    <div className="h-3 w-2/5 bg-[#1b1717]/[0.06] animate-pulse" />
+                    <div className="h-4 w-4/5 bg-[#1b1717]/[0.08] animate-pulse" />
+                    <div className="h-3.5 w-1/3 bg-[#1b1717]/[0.06] animate-pulse" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : filteredProducts.length === 0 ? (
             <div className="py-20 text-center">
               <h2 className="heading-serif text-xl lg:text-2xl font-normal mb-2">
                 No matching outfits found
@@ -693,21 +691,22 @@ function CollectionsContent() {
             <div className="mt-8 grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-[3vw] sm:gap-x-5 lg:gap-x-6 gap-y-8 lg:gap-y-10">
               {filteredProducts.map((product) => (
                 <Link
-                  key={product.id}
+                  key={product._id || product.id || product.slug}
                   href={`/shop/${product.slug}`}
                   className="product-card-item group flex flex-col"
                 >
                   <div className="relative w-full aspect-[3/4] overflow-hidden bg-[#1b1717]/5">
-                    <img
-                      src={product.image}
+                    <ResponsiveImage
+                      src={product.image || product.gallery?.[0]}
                       alt={product.title}
+                      preset="card"
                       className="w-full h-full object-cover"
                     />
                   </div>
 
                   <div className="mt-3 flex flex-col gap-1">
                     <span className="text-[10px] uppercase tracking-widest text-[#1b1717]/55">
-                      {product.categoryLabel} • {product.season}
+                      {product.categoryLabel || product.category} • {product.season}
                     </span>
                     <h2 className="heading-serif text-sm sm:text-base lg:text-[16px] font-normal text-[#1b1717] group-hover:text-[#5d100a] transition-colors line-clamp-1">
                       {product.title}

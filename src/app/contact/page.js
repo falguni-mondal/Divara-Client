@@ -60,7 +60,7 @@ function TicketReplyNode({
   depth = 0,
 }) {
   const children = allReplies.filter((r) => r.parentReplyId === reply.id);
-  const isAdmin = reply.authorRole === "admin";
+  const isAdmin = reply.authorRole === "admin" || reply.authorRole === "super_admin";
   const isReplyingHere =
     activeReplyTarget?.ticketId === ticketId &&
     activeReplyTarget?.parentReplyId === reply.id;
@@ -86,7 +86,6 @@ function TicketReplyNode({
           {reply.message}
         </p>
 
-        {/* User can ONLY reply to Admin replies (no self-reply, no like/share) */}
         {isAdmin && (
           <div className="mt-2.5">
             <button
@@ -405,7 +404,6 @@ export default function ContactPage() {
                   rows={5}
                   label="Message *"
                   required
-                  maxScaleChars={120}
                   value={formData.message}
                   onChange={(e) => setFormData({ ...formData, message: e.target.value })}
                   placeholder="Write your message here..."
@@ -423,7 +421,6 @@ export default function ContactPage() {
         </div>
       </section>
 
-      {/* Threaded Support Inquiries (Facebook/Instagram Comment-Reply Style) */}
       <section className="max-w-[1440px] mx-auto px-[3vw] lg:px-10 pb-16">
         <div className="border-t border-[#1b1717]/15 pt-12 max-w-4xl mx-auto">
           <span className="text-xs uppercase tracking-[0.22em] text-[#5d100a] font-semibold">

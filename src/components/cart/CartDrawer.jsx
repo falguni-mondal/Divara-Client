@@ -6,13 +6,14 @@ import { X, Plus, Minus, Tag } from "lucide-react";
 import { useShop } from "@/context/ShopContext";
 import { useSmoothScroll } from "@/components/providers/SmoothScrollProvider";
 import { formatINR } from "@/data/catalogData";
-import { ikUrl } from "@/lib/imagekit";
 import { getApiErrorMessage } from "@/lib/api";
+import ResponsiveImage from "@/components/ui/ResponsiveImage";
 
 export default function CartDrawer() {
   const {
     user,
     bag,
+    bagCount,
     isBagOpen,
     setIsBagOpen,
     updateQuantity,
@@ -37,6 +38,15 @@ export default function CartDrawer() {
     }
     return () => startScroll();
   }, [isBagOpen, stopScroll, startScroll]);
+
+  useEffect(() => {
+    if (!isBagOpen) return;
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") setIsBagOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isBagOpen, setIsBagOpen]);
 
   const handleApplyCoupon = async (e) => {
     e.preventDefault();
@@ -76,7 +86,7 @@ export default function CartDrawer() {
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-[#1b1717]/15">
           <h2 className="heading-serif uppercase text-base tracking-wider font-normal">
-            Shopping Bag ({bag.length})
+            Shopping Bag ({bagCount})
           </h2>
           <button
             type="button"
@@ -135,9 +145,10 @@ export default function CartDrawer() {
                   onClick={() => setIsBagOpen(false)}
                   className="h-24 w-[72px] shrink-0 overflow-hidden bg-[#1b1717]/5"
                 >
-                  <img
-                    src={ikUrl(item.image, { width: 240 })}
+                  <ResponsiveImage
+                    src={item.image}
                     alt={item.title}
+                    preset="thumb"
                     className="h-full w-full object-cover"
                   />
                 </Link>
@@ -160,6 +171,7 @@ export default function CartDrawer() {
                     <div className="inline-flex items-center border border-[#1b1717]/25">
                       <button
                         type="button"
+                        aria-label={`Decrease quantity of ${item.title}`}
                         onClick={() => updateQuantity(item.id, item.size, -1)}
                         className="p-1 hover:bg-[#1b1717] hover:text-[#ffffff] transition-colors cursor-pointer"
                       >
@@ -168,6 +180,7 @@ export default function CartDrawer() {
                       <span className="px-2.5 text-xs">{item.quantity}</span>
                       <button
                         type="button"
+                        aria-label={`Increase quantity of ${item.title}`}
                         onClick={() => updateQuantity(item.id, item.size, 1)}
                         className="p-1 hover:bg-[#1b1717] hover:text-[#ffffff] transition-colors cursor-pointer"
                       >
@@ -187,7 +200,6 @@ export default function CartDrawer() {
 
         {user && bag.length > 0 && (
           <div className="border-t border-[#1b1717]/15 px-5 py-4 bg-[#ffffff] space-y-3">
-            {/* Coupon Input or Active Coupon Badge */}
             {appliedCoupon ? (
               <div className="flex items-center justify-between bg-[#5d100a]/5 border border-[#5d100a]/25 px-3 py-2 text-[11px]">
                 <div className="flex items-center gap-1.5 text-[#5d100a] font-semibold">
@@ -229,7 +241,7 @@ export default function CartDrawer() {
 
             <div className="space-y-1.5 pt-1 text-xs">
               <div className="flex items-center justify-between text-[#1b1717]/70">
-                <span>Subtotal</span>
+                <span>Subtotal (Incl. GST)</span>
                 <span>{formatINR(bagSubtotal)}</span>
               </div>
               {discountInr > 0 && (
