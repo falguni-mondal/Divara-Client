@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import Script from "next/script";
 import { useRouter } from "next/navigation";
-import { MapPin, Check } from "lucide-react";
+import { MapPin, Check, X } from "lucide-react";
 import { useShop } from "@/context/ShopContext";
+import { useToast } from "@/context/ToastContext";
 import { useSmoothScroll } from "@/components/providers/SmoothScrollProvider";
 import { api, getApiErrorMessage } from "@/lib/api";
 import { formatINR } from "@/data/catalogData";
@@ -15,6 +16,7 @@ import { getStoredAttribution } from "@/components/analytics/UtmTracker";
 
 export default function CheckoutPage() {
   const router = useRouter();
+  const toast = useToast();
   const { scrollTo, refreshScroll } = useSmoothScroll();
   const {
     user,
@@ -46,7 +48,9 @@ export default function CheckoutPage() {
   const [errorMsg, setErrorMsg] = useState("");
   const [confirmedOrder, setConfirmedOrder] = useState(null);
 
-  // Immediately scroll to top when entering verifying or confirmed state (works with Lenis + native scroll)
+  const paymentCompletedRef = useRef(false);
+
+  // Scroll to top when entering verifying or confirmed state
   useEffect(() => {
     if (!verifying && !confirmedOrder) return;
     scrollTo(0, { immediate: true });
@@ -74,6 +78,9 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     if (!user || isAdmin) return;
+    // Hydrate fresh stock & prices when landing on checkout
+    syncBagAndAutoCoupon();
+
     setShipping((prev) => ({
       ...prev,
       fullName: prev.fullName || user.fullName || "",
@@ -93,7 +100,6 @@ export default function CheckoutPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, isAdmin]);
 
-  // Final MRP is GST-Inclusive (12%). Intra-state West Bengal = CGST 6% + SGST 6%; Others = IGST 12%
   const grandTotalInr = Math.max(0, bagSubtotal - discountInr);
   const taxableBaseInr = Math.round(grandTotalInr / 1.12);
   const totalGstInr = grandTotalInr - taxableBaseInr;
@@ -106,13 +112,32 @@ export default function CheckoutPage() {
     setErrorMsg("");
 
     if (typeof window === "undefined" || !window.Razorpay) {
-      setErrorMsg("Payment gateway is still loading. Please wait a moment and try again.");
+      const msg = "Payment gateway is still loading. Please wait a moment and try again.";
+      setErrorMsg(msg);
+      toast.warning(msg);
       return;
     }
 
     setSubmitting(true);
+    paymentCompletedRef.current = false;
 
     try {
+      // Step 1: Final live stock, active-status, price, and coupon preflight check BEFORE reserving
+      const { data: preflightRes } = await api.post("/checkout/preflight", {
+        couponCode: appliedCoupon?.code || null,
+      });
+
+      if (!preflightRes?.data?.ok) {
+        const firstIssue =
+          preflightRes?.data?.issues?.[0]?.reason ||
+          "Some items in your bag are no longer available in the requested quantity.";
+        setErrorMsg(firstIssue);
+        toast.error(firstIssue);
+        await syncBagAndAutoCoupon();
+        return;
+      }
+
+      // Step 2: Authoritative MongoDB ACID transaction check + temporary 15m reservation + Razorpay order
       const { data } = await api.post("/checkout/session", {
         shippingAddress: shipping,
         couponCode: appliedCoupon?.code || null,
@@ -122,7 +147,9 @@ export default function CheckoutPage() {
       const session = data.data;
 
       if (!session?.razorpayKeyId) {
-        setErrorMsg("Online payments are temporarily unavailable. Please try again shortly.");
+        const msg = "Online payments are temporarily unavailable. Please try again shortly.";
+        setErrorMsg(msg);
+        toast.error(msg);
         return;
       }
 
@@ -145,7 +172,23 @@ export default function CheckoutPage() {
           contact: shipping.phone,
         },
         theme: { color: "#5d100a" },
+        modal: {
+          // Immediately release the 15-minute stock hold if the customer closes Razorpay without paying
+          ondismiss: async () => {
+            if (paymentCompletedRef.current) return;
+            try {
+              await api.post("/checkout/release", {
+                orderId: session.orderId,
+                razorpayOrderId: session.razorpayOrderId,
+              });
+              toast.info("Checkout closed — reserved stock has been released.");
+            } catch {
+              // Non-blocking; 15-min reclaimer remains as safety net
+            }
+          },
+        },
         handler: async (response) => {
+          paymentCompletedRef.current = true;
           setVerifying(true);
           setErrorMsg("");
           try {
@@ -155,14 +198,15 @@ export default function CheckoutPage() {
               razorpaySignature: response.razorpay_signature,
             });
             setConfirmedOrder({ ...session, verified: true });
+            toast.success(`Order ${session.orderNumber} confirmed!`);
             await syncBagAndAutoCoupon();
           } catch (verifyErr) {
-            setErrorMsg(
-              getApiErrorMessage(
-                verifyErr,
-                "Payment was captured, but verification timed out. Please check My Account."
-              )
+            const msg = getApiErrorMessage(
+              verifyErr,
+              "Payment was captured, but verification timed out. Please check My Account."
             );
+            setErrorMsg(msg);
+            toast.error(msg);
           } finally {
             setVerifying(false);
           }
@@ -171,9 +215,10 @@ export default function CheckoutPage() {
 
       rzp.on("payment.failed", async (failResp) => {
         const errObj = failResp?.error || {};
-        setErrorMsg(
-          errObj.description || "Payment was declined or cancelled. No amount was deducted."
-        );
+        const msg =
+          errObj.description || "Payment was declined or cancelled. No amount was deducted.";
+        setErrorMsg(msg);
+        toast.error(msg);
         try {
           await api.post("/checkout/failure", {
             razorpayOrderId: session.razorpayOrderId,
@@ -188,7 +233,10 @@ export default function CheckoutPage() {
 
       rzp.open();
     } catch (err) {
-      setErrorMsg(getApiErrorMessage(err, "Unable to initiate checkout."));
+      const msg = getApiErrorMessage(err, "Unable to initiate checkout.");
+      setErrorMsg(msg);
+      toast.error(msg);
+      await syncBagAndAutoCoupon();
     } finally {
       setSubmitting(false);
     }
@@ -335,8 +383,16 @@ export default function CheckoutPage() {
               </h2>
 
               {errorMsg && (
-                <div className="p-3 bg-[#5d100a]/5 border border-[#5d100a]/25 text-xs text-[#5d100a]">
-                  {errorMsg}
+                <div className="p-3 bg-[#5d100a]/5 border border-[#5d100a]/25 text-xs text-[#5d100a] flex items-start justify-between gap-2">
+                  <span>{errorMsg}</span>
+                  <button
+                    type="button"
+                    onClick={() => setErrorMsg("")}
+                    aria-label="Dismiss error"
+                    className="p-0.5 hover:text-[#1b1717] cursor-pointer shrink-0"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               )}
 
@@ -406,7 +462,7 @@ export default function CheckoutPage() {
                 className="w-full py-3.5 bg-[#5d100a] hover:bg-[#1b1717] text-[#ffffff] text-xs uppercase tracking-widest font-semibold transition-colors cursor-pointer disabled:opacity-50"
               >
                 {submitting
-                  ? "Reserving Stock & Opening Payment..."
+                  ? "Verifying Live Stock & Opening Payment..."
                   : `Pay ${formatINR(grandTotalInr)} with Razorpay`}
               </button>
             </form>
@@ -430,6 +486,11 @@ export default function CheckoutPage() {
                       <p className="text-[11px] text-[#1b1717]/60">
                         Size {item.size} × {item.quantity}
                       </p>
+                      {item.stockWarning && (
+                        <p className="text-[10px] text-[#5d100a] font-medium mt-0.5">
+                          {item.stockWarning}
+                        </p>
+                      )}
                     </div>
                     <span className="text-xs font-semibold shrink-0">
                       {formatINR(item.price * item.quantity)}

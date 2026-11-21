@@ -12,6 +12,8 @@ import {
   Lock,
   Unlock,
   FileSpreadsheet,
+  Sparkles,
+  Ruler,
 } from "lucide-react";
 import { api, getApiErrorMessage } from "@/lib/api";
 import {
@@ -19,29 +21,28 @@ import {
   deleteAdminImageFromImageKit,
   ikUrl,
 } from "@/lib/imagekit";
-import { formatINR } from "@/data/catalogData";
+import {
+  CATEGORY_CONFIG,
+  COLOR_PALETTE,
+  FABRIC_LIST,
+  formatINR,
+} from "@/data/catalogData";
+import {
+  getAllowedSizesForCategory,
+  getDefaultSizesForCategory,
+  getSizeSystemForCategory,
+  getSizeMeasurements,
+} from "@/data/sizeChart";
 import { downloadExcelWorkbook } from "@/lib/excelExport";
 import UrlPagination, { useUrlPageParam } from "./UrlPagination";
 
-const CATEGORY_OPTIONS = [
-  { value: "saree", label: "Sarees", code: "SAR", defaultFabric: "Silk" },
-  { value: "dress", label: "Dresses", code: "DRS", defaultFabric: "Velvet" },
-  { value: "denim", label: "Denim Wears", code: "DNM", defaultFabric: "Cotton Denim" },
-  { value: "shirt", label: "Shirts", code: "SHR", defaultFabric: "Silk" },
-];
-
 const SEASON_OPTIONS = ["Winter", "Spring", "Summer", "Autumn"];
 
-const COLOR_OPTIONS = [
-  { name: "Maroon", hex: "#5d100a" },
-  { name: "Black", hex: "#1b1717" },
-  { name: "Ivory", hex: "#edebdd" },
-  { name: "Indigo", hex: "#26364d" },
-  { name: "Gold", hex: "#b69148" },
-];
-
-const FABRIC_OPTIONS = ["Silk", "Velvet", "Cotton Denim", "Chanderi"];
-const ALL_SIZES = ["XS", "S", "M", "L", "XL", "Free Size"];
+function getCategoryCfg(categoryValue) {
+  return (
+    CATEGORY_CONFIG.find((c) => c.value === categoryValue) || CATEGORY_CONFIG[0]
+  );
+}
 
 function makeSlug(text) {
   return String(text || "")
@@ -51,28 +52,34 @@ function makeSlug(text) {
 }
 
 function makeSku(category, slug, size) {
-  const catCode = CATEGORY_OPTIONS.find((c) => c.value === category)?.code || "DIV";
+  const catCode = getCategoryCfg(category)?.code || "DIV";
   const slugPart = (slug || "ITEM").replace(/-/g, "").slice(0, 5).toUpperCase();
-  const sizePart = size.replace(/\s+/g, "").toUpperCase();
+  const sizePart = String(size || "").replace(/\s+/g, "").toUpperCase();
   return `DIV-${catCode}-${slugPart}-${sizePart}`;
 }
 
 function createInitialForm() {
+  const defaultCat = "saree";
+  const cfg = getCategoryCfg(defaultCat);
+  const defaultSizes = getDefaultSizesForCategory(defaultCat);
   return {
     title: "",
     slug: "",
-    category: "saree",
-    season: "Winter",
+    category: defaultCat,
+    season: cfg?.defaultSeason || "Winter",
     colorPreset: "Maroon",
     color: "Maroon",
     colorHex: "#5d100a",
-    fabric: "Silk",
-    price: 25000,
+    fabric: cfg?.defaultFabric || "Silk",
+    price: cfg?.defaultPrice || 25000,
     description: "",
     craftNotesText: "",
-    variants: [
-      { size: "Free Size", sku: "DIV-SAR-ITEM-FREESIZE", stockOnHand: 8, stockReserved: 0 },
-    ],
+    variants: defaultSizes.map((size) => ({
+      size,
+      sku: makeSku(defaultCat, "item", size),
+      stockOnHand: 8,
+      stockReserved: 0,
+    })),
     galleryMedia: [],
     isActive: true,
   };
@@ -127,8 +134,11 @@ export default function AdminProductsTab() {
     }
   };
 
-  const isSaree = form.category === "saree";
-  const isDenim = form.category === "denim";
+  const currentCategoryCfg = getCategoryCfg(form.category);
+  const currentSizeSystem = getSizeSystemForCategory(form.category);
+  const allowedSizes = getAllowedSizesForCategory(form.category);
+  const isFabricLocked = Boolean(currentCategoryCfg?.lockFabric);
+  const disallowedFabrics = currentCategoryCfg?.disallowedFabrics || [];
   const isCustomColor = form.colorPreset === "__custom__";
 
   const openCreateForm = async () => {
@@ -159,22 +169,26 @@ export default function AdminProductsTab() {
         ? [product.imageMedia]
         : [];
 
-    const matchedPreset = COLOR_OPTIONS.find(
+    const matchedPreset = COLOR_PALETTE.find(
       (c) =>
         c.name.toLowerCase() === (product.color || "").toLowerCase() &&
         c.hex.toLowerCase() === (product.colorHex || "").toLowerCase()
     );
 
+    const cat = product.category || "saree";
+    const cfg = getCategoryCfg(cat);
+    const fallbackSize = getDefaultSizesForCategory(cat)[0] || "M";
+
     setForm({
       title: product.title || "",
       slug: product.slug || "",
-      category: product.category || "saree",
-      season: product.season || "Winter",
+      category: cat,
+      season: product.season || cfg.defaultSeason || "Winter",
       colorPreset: matchedPreset ? matchedPreset.name : "__custom__",
       color: product.color || "",
       colorHex: product.colorHex || "#5d100a",
-      fabric: product.fabric || "Silk",
-      price: product.price || 25000,
+      fabric: product.fabric || cfg.defaultFabric || "Silk",
+      price: product.price || cfg.defaultPrice || 25000,
       description: product.description || "",
       craftNotesText: (product.craftNotes || []).join("\n"),
       variants:
@@ -187,8 +201,8 @@ export default function AdminProductsTab() {
             }))
           : [
               {
-                size: "Free Size",
-                sku: makeSku(product.category, product.slug, "Free Size"),
+                size: fallbackSize,
+                sku: makeSku(cat, product.slug, fallbackSize),
                 stockOnHand: 5,
                 stockReserved: 0,
               },
@@ -201,42 +215,46 @@ export default function AdminProductsTab() {
   };
 
   const handleCategoryChange = (nextCategory) => {
-    const meta = CATEGORY_OPTIONS.find((c) => c.value === nextCategory);
+    const cfg = getCategoryCfg(nextCategory);
+    const nextAllowed = getAllowedSizesForCategory(nextCategory);
+    const nextDefaults = getDefaultSizesForCategory(nextCategory);
+    const nextDisallowed = cfg.disallowedFabrics || [];
+
     setForm((prev) => {
       const nextSlug = prev.slug || makeSlug(prev.title);
-      let nextVariants = prev.variants;
-      let nextFabric = prev.fabric;
+      const compatibleExisting = prev.variants.filter((v) =>
+        nextAllowed.includes(v.size)
+      );
 
-      if (nextCategory === "saree") {
-        const existingFree = prev.variants.find((v) => v.size === "Free Size");
-        nextVariants = [
-          existingFree || {
-            size: "Free Size",
-            sku: makeSku(nextCategory, nextSlug, "Free Size"),
-            stockOnHand: 8,
-            stockReserved: 0,
-          },
-        ];
-        if (prev.fabric === "Cotton Denim") nextFabric = "Silk";
-      } else {
-        const apparelOnly = prev.variants.filter((v) => v.size !== "Free Size");
-        nextVariants =
-          apparelOnly.length > 0
-            ? apparelOnly
-            : ["S", "M", "L"].map((size) => ({
-                size,
-                sku: makeSku(nextCategory, nextSlug, size),
-                stockOnHand: 6,
-                stockReserved: 0,
-              }));
-        if (nextCategory === "denim") {
-          nextFabric = "Cotton Denim";
-        } else if (prev.fabric === "Cotton Denim" && meta?.defaultFabric) {
-          nextFabric = meta.defaultFabric;
-        }
+      const nextVariants =
+        compatibleExisting.length > 0
+          ? compatibleExisting.map((v) => ({
+              ...v,
+              sku: !editingId ? makeSku(nextCategory, nextSlug, v.size) : v.sku,
+            }))
+          : nextDefaults.map((size) => ({
+              size,
+              sku: makeSku(nextCategory, nextSlug, size),
+              stockOnHand: 6,
+              stockReserved: 0,
+            }));
+
+      let nextFabric = prev.fabric;
+      if (cfg.lockFabric || !editingId || nextDisallowed.includes(prev.fabric)) {
+        nextFabric = cfg.defaultFabric || prev.fabric;
       }
 
-      return { ...prev, category: nextCategory, fabric: nextFabric, variants: nextVariants };
+      const nextSeason = !editingId && cfg.defaultSeason ? cfg.defaultSeason : prev.season;
+      const nextPrice = !editingId && cfg.defaultPrice ? cfg.defaultPrice : prev.price;
+
+      return {
+        ...prev,
+        category: nextCategory,
+        fabric: nextFabric,
+        season: nextSeason,
+        price: nextPrice,
+        variants: nextVariants,
+      };
     });
   };
 
@@ -245,7 +263,7 @@ export default function AdminProductsTab() {
       setForm((prev) => ({ ...prev, colorPreset: "__custom__", color: "" }));
       return;
     }
-    const match = COLOR_OPTIONS.find((c) => c.name === val);
+    const match = COLOR_PALETTE.find((c) => c.name === val);
     setForm((prev) => ({
       ...prev,
       colorPreset: val,
@@ -255,11 +273,17 @@ export default function AdminProductsTab() {
   };
 
   const handleManualHexPick = (hex) => {
-    const match = COLOR_OPTIONS.find((c) => c.hex.toLowerCase() === hex.toLowerCase());
+    const match = COLOR_PALETTE.find(
+      (c) => c.hex.toLowerCase() === hex.toLowerCase()
+    );
     setForm((prev) => ({
       ...prev,
       colorPreset: match ? match.name : "__custom__",
-      color: match ? match.name : prev.colorPreset === "__custom__" ? prev.color : "",
+      color: match
+        ? match.name
+        : prev.colorPreset === "__custom__"
+        ? prev.color
+        : "",
       colorHex: hex,
     }));
   };
@@ -282,8 +306,7 @@ export default function AdminProductsTab() {
   };
 
   const toggleSizeVariant = (size) => {
-    if (isSaree && size !== "Free Size") return;
-    if (!isSaree && size === "Free Size") return;
+    if (!allowedSizes.includes(size)) return;
 
     setForm((prev) => {
       const exists = prev.variants.some((v) => v.size === size);
@@ -292,14 +315,52 @@ export default function AdminProductsTab() {
         return { ...prev, variants: prev.variants.filter((v) => v.size !== size) };
       }
       const nextSlug = prev.slug || makeSlug(prev.title);
-      return {
-        ...prev,
-        variants: [
-          ...prev.variants,
-          { size, sku: makeSku(prev.category, nextSlug, size), stockOnHand: 6, stockReserved: 0 },
-        ],
-      };
+      const nextList = [
+        ...prev.variants,
+        {
+          size,
+          sku: makeSku(prev.category, nextSlug, size),
+          stockOnHand: 6,
+          stockReserved: 0,
+        },
+      ];
+      nextList.sort(
+        (a, b) => allowedSizes.indexOf(a.size) - allowedSizes.indexOf(b.size)
+      );
+      return { ...prev, variants: nextList };
     });
+  };
+
+  const handleSelectAllAllowedSizes = () => {
+    setForm((prev) => {
+      const nextSlug = prev.slug || makeSlug(prev.title);
+      const existingMap = new Map(prev.variants.map((v) => [v.size, v]));
+      const nextVariants = allowedSizes.map((size) => {
+        if (existingMap.has(size)) return existingMap.get(size);
+        return {
+          size,
+          sku: makeSku(prev.category, nextSlug, size),
+          stockOnHand: 6,
+          stockReserved: 0,
+        };
+      });
+      return { ...prev, variants: nextVariants };
+    });
+  };
+
+  const handleAutoFillCraftNotes = () => {
+    const fn = currentCategoryCfg?.craftTemplate;
+    if (typeof fn !== "function") return;
+    const lines = fn(
+      form.fabric || currentCategoryCfg.defaultFabric || "Silk",
+      form.color || "Signature"
+    );
+    if (Array.isArray(lines) && lines.length > 0) {
+      setForm((prev) => ({
+        ...prev,
+        craftNotesText: lines.join("\n"),
+      }));
+    }
   };
 
   const updateVariantField = (size, field, value) => {
@@ -392,8 +453,7 @@ export default function AdminProductsTab() {
     setSaving(true);
     try {
       const finalSlug = form.slug.trim() || makeSlug(form.title);
-      const catLabel =
-        CATEGORY_OPTIONS.find((c) => c.value === form.category)?.label || form.category;
+      const catLabel = getCategoryCfg(form.category)?.label || form.category;
 
       const payload = {
         slug: finalSlug,
@@ -557,6 +617,9 @@ export default function AdminProductsTab() {
   const baseValuePreview = Math.round(finalMrp / 1.12);
   const includedGstPreview = finalMrp - baseValuePreview;
 
+  const recommendedFabrics = currentCategoryCfg?.recommendedFabrics || [];
+  const otherFabrics = FABRIC_LIST.filter((f) => !recommendedFabrics.includes(f));
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
@@ -631,7 +694,7 @@ export default function AdminProductsTab() {
             </div>
           )}
 
-          {/* Row 1 */}
+          {/* Row 1: Title, Slug, Final MRP */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
             <div>
               <label className="block text-[10px] uppercase tracking-[0.18em] text-[#1b1717]/70 font-semibold mb-1.5">
@@ -642,7 +705,7 @@ export default function AdminProductsTab() {
                 required
                 value={form.title}
                 onChange={(e) => handleTitleChange(e.target.value)}
-                placeholder="Royal Crimson Kanjivaram Saree"
+                placeholder="e.g., Royal Crimson Kanjivaram Saree"
                 className="w-full border border-[#1b1717]/25 px-3 py-2 text-xs outline-none focus:border-[#5d100a]"
               />
             </div>
@@ -690,23 +753,26 @@ export default function AdminProductsTab() {
             </div>
           </div>
 
-          {/* Row 2: Selective Dropdowns + Manual Color Picker */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          {/* Row 2: Smart Outfit Category, Season, Fabric */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
             <div>
               <label className="block text-[10px] uppercase tracking-[0.18em] text-[#1b1717]/70 font-semibold mb-1.5">
-                Category *
+                Outfit Category *
               </label>
               <select
                 value={form.category}
                 onChange={(e) => handleCategoryChange(e.target.value)}
                 className="w-full border border-[#1b1717]/25 px-3 py-2 text-xs bg-[#ffffff] outline-none focus:border-[#5d100a]"
               >
-                {CATEGORY_OPTIONS.map((opt) => (
+                {CATEGORY_CONFIG.map((opt) => (
                   <option key={opt.value} value={opt.value}>
-                    {opt.label}
+                    {opt.label} ({opt.code})
                   </option>
                 ))}
               </select>
+              <span className="block text-[10px] text-[#1b1717]/55 mt-1">
+                Size system: {currentSizeSystem.label}
+              </span>
             </div>
 
             <div>
@@ -721,6 +787,7 @@ export default function AdminProductsTab() {
                 {SEASON_OPTIONS.map((s) => (
                   <option key={s} value={s}>
                     {s}
+                    {s === currentCategoryCfg?.defaultSeason ? " (Recommended)" : ""}
                   </option>
                 ))}
               </select>
@@ -728,27 +795,94 @@ export default function AdminProductsTab() {
 
             <div>
               <label className="block text-[10px] uppercase tracking-[0.18em] text-[#1b1717]/70 font-semibold mb-1.5">
-                Fabric * {isDenim && <span className="text-[#5d100a]">(Locked)</span>}
+                Fabric * {isFabricLocked && <span className="text-[#5d100a]">(Locked)</span>}
               </label>
               <select
                 value={form.fabric}
-                disabled={isDenim}
+                disabled={isFabricLocked}
                 onChange={(e) => setForm({ ...form, fabric: e.target.value })}
                 className="w-full border border-[#1b1717]/25 px-3 py-2 text-xs bg-[#ffffff] outline-none focus:border-[#5d100a] disabled:bg-[#1b1717]/5 disabled:text-[#1b1717]/55 disabled:cursor-not-allowed"
               >
-                {FABRIC_OPTIONS.map((f) => (
-                  <option key={f} value={f} disabled={isSaree && f === "Cotton Denim"}>
-                    {f}
-                  </option>
-                ))}
+                {recommendedFabrics.length > 0 && (
+                  <optgroup label={`Recommended for ${currentCategoryCfg?.label || "Outfit"}`}>
+                    {recommendedFabrics.map((f) => (
+                      <option key={f} value={f}>
+                        {f}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                <optgroup label="All Fabrics">
+                  {otherFabrics.map((f) => (
+                    <option
+                      key={f}
+                      value={f}
+                      disabled={disallowedFabrics.includes(f)}
+                    >
+                      {f}
+                    </option>
+                  ))}
+                </optgroup>
               </select>
             </div>
+          </div>
 
-            <div>
-              <label className="block text-[10px] uppercase tracking-[0.18em] text-[#1b1717]/70 font-semibold mb-1.5">
-                Color Preset or Manual Picker *
-              </label>
-              <div className="flex items-center gap-2">
+          {/* Row 2B: Visual 16-Color Swatch Palette + Custom Hex Picker */}
+          <div className="border border-[#1b1717]/15 p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[10px] uppercase tracking-[0.18em] text-[#1b1717]/70 font-semibold">
+                Color Swatch Palette &amp; Custom Picker *
+              </span>
+              <div className="flex items-center gap-2 text-xs">
+                <span
+                  className="w-4 h-4 rounded-full border border-black/25 inline-block"
+                  style={{ backgroundColor: form.colorHex }}
+                />
+                <span className="font-medium">{form.color || "Custom Color"}</span>
+                <span className="font-mono text-[10px] text-[#1b1717]/55">
+                  {form.colorHex.toUpperCase()}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              {COLOR_PALETTE.map((c) => {
+                const isSelected = form.colorPreset === c.name;
+                return (
+                  <button
+                    key={c.name}
+                    type="button"
+                    onClick={() => handleColorPresetChange(c.name)}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] border rounded-[2px] transition-colors cursor-pointer ${
+                      isSelected
+                        ? "bg-[#1b1717] text-[#ffffff] border-[#1b1717]"
+                        : "bg-[#ffffff] text-[#1b1717] border-[#1b1717]/20 hover:border-[#5d100a]"
+                    }`}
+                  >
+                    <span
+                      className="w-3 h-3 rounded-full border border-black/20 shrink-0"
+                      style={{ backgroundColor: c.hex }}
+                    />
+                    <span>{c.name}</span>
+                  </button>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={() => handleColorPresetChange("__custom__")}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] border rounded-[2px] transition-colors cursor-pointer ${
+                  isCustomColor
+                    ? "bg-[#5d100a] text-[#ffffff] border-[#5d100a]"
+                    : "bg-[#ffffff] text-[#5d100a] border-[#5d100a]/35 hover:border-[#5d100a]"
+                }`}
+              >
+                <span>+ Custom Hex</span>
+              </button>
+            </div>
+
+            {isCustomColor && (
+              <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-[#1b1717]/10">
                 <input
                   type="color"
                   value={form.colorHex}
@@ -756,66 +890,57 @@ export default function AdminProductsTab() {
                   title="Pick any custom color"
                   className="w-9 h-9 p-0.5 border border-[#1b1717]/25 bg-[#ffffff] cursor-pointer shrink-0"
                 />
-                <select
-                  value={form.colorPreset}
-                  onChange={(e) => handleColorPresetChange(e.target.value)}
-                  className="flex-1 border border-[#1b1717]/25 px-2.5 py-2 text-xs bg-[#ffffff] outline-none focus:border-[#5d100a]"
-                >
-                  {COLOR_OPTIONS.map((c) => (
-                    <option key={c.name} value={c.name}>
-                      {c.name}
-                    </option>
-                  ))}
-                  <option value="__custom__">+ Custom Color</option>
-                </select>
-              </div>
-              {isCustomColor && (
-                <div className="mt-2">
+                <div className="flex-1 min-w-[200px]">
                   <label className="block text-[9px] uppercase tracking-[0.16em] text-[#5d100a] font-semibold mb-1">
-                    Manual Color Name ({form.colorHex.toUpperCase()}) *
+                    Custom Color Name ({form.colorHex.toUpperCase()}) *
                   </label>
                   <input
                     type="text"
                     required
                     value={form.color}
                     onChange={(e) => setForm({ ...form, color: e.target.value })}
-                    placeholder="e.g., Emerald Green, Champagne Rose"
+                    placeholder="e.g., Champagne Rose, Deep Peacock"
                     className="w-full border border-[#5d100a]/45 px-2.5 py-1.5 text-xs outline-none focus:border-[#5d100a]"
                   />
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
 
-          {/* Row 3: Sizes & Variants */}
+          {/* Row 3: Category-Specific Sizes, SKUs, Stock & Live Measurement Preview */}
           <div className="border border-[#1b1717]/15 p-4 space-y-4">
-            <div>
-              <span className="block text-[10px] uppercase tracking-[0.18em] text-[#1b1717]/70 font-semibold">
-                Available Sizes, SKUs &amp; Opening Stock *
-              </span>
-              <p className="text-[11px] text-[#1b1717]/55 mt-0.5">
-                {isSaree
-                  ? "Sarees use Free Size draping — apparel sizes (XS–XL) are automatically disabled."
-                  : "Select applicable apparel sizes (XS–XL). Free Size is disabled for tailored garments."}
-              </p>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <span className="block text-[10px] uppercase tracking-[0.18em] text-[#1b1717]/70 font-semibold">
+                  Available Sizes, SKUs &amp; Opening Stock *
+                </span>
+                <p className="text-[11px] text-[#1b1717]/55 mt-0.5">
+                  {currentSizeSystem.label} — {currentSizeSystem.fitNote}
+                </p>
+              </div>
+              {allowedSizes.length > 1 && (
+                <button
+                  type="button"
+                  onClick={handleSelectAllAllowedSizes}
+                  className="px-3 py-1 text-[10px] uppercase tracking-wider border border-[#1b1717]/25 hover:border-[#5d100a] hover:text-[#5d100a] transition-colors cursor-pointer"
+                >
+                  Select All {allowedSizes.length} Sizes
+                </button>
+              )}
             </div>
 
             <div className="flex flex-wrap gap-2">
-              {ALL_SIZES.map((size) => {
-                const disabled = isSaree ? size !== "Free Size" : size === "Free Size";
+              {allowedSizes.map((size) => {
                 const selected = form.variants.some((v) => v.size === size);
                 return (
                   <button
                     key={size}
                     type="button"
-                    disabled={disabled}
                     onClick={() => toggleSizeVariant(size)}
-                    className={`px-3.5 py-1.5 text-[11px] uppercase tracking-wider border rounded-[2px] transition-colors ${
-                      disabled
-                        ? "border-[#1b1717]/10 bg-[#1b1717]/5 text-[#1b1717]/30 cursor-not-allowed"
-                        : selected
-                        ? "bg-[#5d100a] text-[#ffffff] border-[#5d100a] cursor-pointer"
-                        : "border-[#1b1717]/25 text-[#1b1717] hover:border-[#1b1717] cursor-pointer"
+                    className={`px-3.5 py-1.5 text-[11px] uppercase tracking-wider border rounded-[2px] transition-colors cursor-pointer ${
+                      selected
+                        ? "bg-[#5d100a] text-[#ffffff] border-[#5d100a]"
+                        : "border-[#1b1717]/25 text-[#1b1717] hover:border-[#1b1717]"
                     }`}
                   >
                     {size}
@@ -825,45 +950,63 @@ export default function AdminProductsTab() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-2">
-              {form.variants.map((v) => (
-                <div key={v.size} className="border border-[#1b1717]/15 p-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold">{v.size}</span>
-                    {v.stockReserved > 0 && (
-                      <span className="text-[10px] text-[#5d100a]">{v.stockReserved} reserved</span>
+              {form.variants.map((v) => {
+                const preview = getSizeMeasurements(form.category, v.size, "in");
+                const summaryMetrics = (preview?.metrics || []).slice(0, 3);
+                return (
+                  <div key={v.size} className="border border-[#1b1717]/15 p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold">Size {v.size}</span>
+                      {v.stockReserved > 0 && (
+                        <span className="text-[10px] text-[#5d100a]">
+                          {v.stockReserved} reserved
+                        </span>
+                      )}
+                    </div>
+
+                    {summaryMetrics.length > 0 && (
+                      <div className="flex items-center gap-1.5 text-[10px] text-[#1b1717]/60 bg-[#faf8f6] px-2 py-1 border border-[#1b1717]/10">
+                        <Ruler className="w-3 h-3 text-[#5d100a] shrink-0" />
+                        <span className="truncate">
+                          {summaryMetrics.map((m) => `${m.label}: ${m.value}`).join(" • ")}
+                        </span>
+                      </div>
                     )}
+
+                    <div>
+                      <label className="block text-[9px] uppercase tracking-wider text-[#1b1717]/55 mb-1">
+                        SKU Code
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={v.sku}
+                        onChange={(e) => updateVariantField(v.size, "sku", e.target.value)}
+                        className="w-full border border-[#1b1717]/20 px-2.5 py-1.5 text-[11px] font-mono outline-none focus:border-[#5d100a]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] uppercase tracking-wider text-[#1b1717]/55 mb-1">
+                        Stock On Hand
+                      </label>
+                      <input
+                        type="number"
+                        min={v.stockReserved || 0}
+                        required
+                        value={v.stockOnHand}
+                        onChange={(e) =>
+                          updateVariantField(v.size, "stockOnHand", e.target.value)
+                        }
+                        className="w-full border border-[#1b1717]/20 px-2.5 py-1.5 text-xs outline-none focus:border-[#5d100a]"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-[9px] uppercase tracking-wider text-[#1b1717]/55 mb-1">
-                      SKU Code
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={v.sku}
-                      onChange={(e) => updateVariantField(v.size, "sku", e.target.value)}
-                      className="w-full border border-[#1b1717]/20 px-2.5 py-1.5 text-[11px] font-mono outline-none focus:border-[#5d100a]"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[9px] uppercase tracking-wider text-[#1b1717]/55 mb-1">
-                      Stock On Hand
-                    </label>
-                    <input
-                      type="number"
-                      min={v.stockReserved || 0}
-                      required
-                      value={v.stockOnHand}
-                      onChange={(e) => updateVariantField(v.size, "stockOnHand", e.target.value)}
-                      className="w-full border border-[#1b1717]/20 px-2.5 py-1.5 text-xs outline-none focus:border-[#5d100a]"
-                    />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
-          {/* Row 4: Description & Craft Notes */}
+          {/* Row 4: Description & Smart Craft Notes */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <div>
               <label className="block text-[10px] uppercase tracking-[0.18em] text-[#1b1717]/70 font-semibold mb-1.5">
@@ -879,9 +1022,19 @@ export default function AdminProductsTab() {
             </div>
 
             <div>
-              <label className="block text-[10px] uppercase tracking-[0.18em] text-[#1b1717]/70 font-semibold mb-1.5">
-                Artisan Craft Notes (One bullet per line)
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-[10px] uppercase tracking-[0.18em] text-[#1b1717]/70 font-semibold">
+                  Artisan Craft Notes (One bullet per line)
+                </label>
+                <button
+                  type="button"
+                  onClick={handleAutoFillCraftNotes}
+                  className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-[#5d100a] hover:underline cursor-pointer"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  <span>Auto-Fill Craft Notes</span>
+                </button>
+              </div>
               <textarea
                 rows={4}
                 value={form.craftNotesText}

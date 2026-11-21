@@ -11,11 +11,18 @@ import React, {
 } from "react";
 import { useRouter } from "next/navigation";
 import { api, getApiErrorMessage } from "@/lib/api";
+import { useToast } from "@/context/ToastContext";
 
 const ShopContext = createContext(null);
 
+// Module-level in-flight locks prevent duplicate /auth/me & /bag calls under React StrictMode or simultaneous mounts
+let inFlightMePromise = null;
+let inFlightBagPromise = null;
+
 export function ShopProvider({ children }) {
   const router = useRouter();
+  const toast = useToast();
+
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [bag, setBag] = useState([]);
@@ -35,6 +42,12 @@ export function ShopProvider({ children }) {
     appliedCouponRef.current = appliedCoupon;
   }, [appliedCoupon]);
 
+  useEffect(() => {
+    if (!bagError) return;
+    const t = setTimeout(() => setBagError(""), 5000);
+    return () => clearTimeout(t);
+  }, [bagError]);
+
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
   const isSuperAdmin =
     user?.role === "super_admin" && user?.email?.toLowerCase() === "admin@divara.com";
@@ -45,58 +58,75 @@ export function ShopProvider({ children }) {
       setBag([]);
       setWishlist([]);
       setAppliedCoupon(null);
-      return;
+      return [];
     }
 
-    try {
-      const { data: bagRes } = await api.get("/bag");
-      const items = bagRes.data?.items || [];
-      setBag(items);
-      setWishlist(bagRes.data?.wishlist || []);
-
-      if (items.length === 0) {
-        setAppliedCoupon(null);
-        return;
-      }
-
-      // If a manual coupon is applied, re-validate it against the updated bag subtotal
-      const currentCoupon = appliedCouponRef.current;
-      if (currentCoupon && currentCoupon.applyMode === "MANUAL" && currentCoupon.code) {
+    if (!inFlightBagPromise) {
+      inFlightBagPromise = (async () => {
         try {
-          const { data: revalRes } = await api.post("/coupons/validate", {
-            code: currentCoupon.code,
-          });
-          setAppliedCoupon({ ...revalRes.data, applyMode: "MANUAL" });
-          return;
-        } catch {
-          // Manual coupon no longer qualifies (e.g. bag dropped below minOrderSubtotal)
-          setAppliedCoupon(null);
-        }
-      }
+          const { data: bagRes } = await api.get("/bag");
+          const items = bagRes.data?.items || [];
+          const wl = bagRes.data?.wishlist || [];
 
-      const { data: autoRes } = await api.get("/coupons/auto");
-      setAppliedCoupon(autoRes.data?.coupon || null);
-    } catch {
-      setBag([]);
-      setWishlist([]);
-      setAppliedCoupon(null);
+          let nextCoupon = null;
+          if (items.length > 0) {
+            const currentCoupon = appliedCouponRef.current;
+            if (currentCoupon && currentCoupon.applyMode === "MANUAL" && currentCoupon.code) {
+              try {
+                const { data: revalRes } = await api.post("/coupons/validate", {
+                  code: currentCoupon.code,
+                });
+                nextCoupon = { ...revalRes.data, applyMode: "MANUAL" };
+              } catch {
+                nextCoupon = null;
+              }
+            }
+            if (!nextCoupon) {
+              const { data: autoRes } = await api.get("/coupons/auto");
+              nextCoupon = autoRes.data?.coupon || null;
+            }
+          }
+
+          return { items, wishlist: wl, coupon: nextCoupon };
+        } catch {
+          return { items: [], wishlist: [], coupon: null };
+        } finally {
+          inFlightBagPromise = null;
+        }
+      })();
     }
+
+    const result = await inFlightBagPromise;
+    setBag(result.items);
+    setWishlist(result.wishlist);
+    setAppliedCoupon(result.coupon);
+    return result.items;
   }, []);
 
   const refreshSession = useCallback(async () => {
     setAuthLoading(true);
     try {
-      const { data } = await api.get("/auth/me");
-      const fetchedUser = data.data?.user || null;
+      if (!inFlightMePromise) {
+        inFlightMePromise = api
+          .get("/auth/me")
+          .then(({ data }) => data.data?.user || null)
+          .catch(() => null)
+          .finally(() => {
+            inFlightMePromise = null;
+          });
+      }
+
+      const fetchedUser = await inFlightMePromise;
       userRoleRef.current = fetchedUser?.role || null;
       setUser(fetchedUser);
-      await syncBagAndAutoCoupon(fetchedUser?.role);
-    } catch {
-      userRoleRef.current = null;
-      setUser(null);
-      setBag([]);
-      setWishlist([]);
-      setAppliedCoupon(null);
+
+      if (fetchedUser) {
+        await syncBagAndAutoCoupon(fetchedUser.role);
+      } else {
+        setBag([]);
+        setWishlist([]);
+        setAppliedCoupon(null);
+      }
     } finally {
       setAuthLoading(false);
     }
@@ -119,46 +149,93 @@ export function ShopProvider({ children }) {
     }
   };
 
-  const addToBag = async (product, selectedSize = "M") => {
+  const addToBag = async (product, selectedSize = "M", quantity = 1) => {
     setBagError("");
     if (isAdmin) return false;
     if (!user) {
+      toast.info("Please sign in to add garments to your bag.");
       router.push("/account?next=bag");
       return false;
     }
+
+    const safeQty = Math.max(1, Math.min(10, Math.floor(Number(quantity) || 1)));
 
     try {
       const { data } = await api.post("/bag/items", {
         productId: product.slug || product.id,
         size: selectedSize,
-        quantity: 1,
+        quantity: safeQty,
       });
-      setBag(data.data?.items || []);
+      const payload = data.data || {};
+      setBag(payload.items || []);
       setIsBagOpen(true);
+      if (payload.clamped && payload.message) {
+        toast.warning(payload.message);
+      } else {
+        toast.success(`Added ${product.title} (${selectedSize}) × ${safeQty} to bag.`);
+      }
       await syncBagAndAutoCoupon();
-      return true;
+      return { ok: true, ...payload };
     } catch (err) {
-      setBagError(getApiErrorMessage(err, "Could not add item to bag."));
-      setIsBagOpen(true);
-      return false;
+      const msg = getApiErrorMessage(err, "Could not add item to bag.");
+      setBagError(msg);
+      toast.error(msg);
+      return { ok: false, error: msg };
+    }
+  };
+
+  const setItemQuantity = async (id, size, quantity, signal) => {
+    setBagError("");
+    if (!user || isAdmin) return null;
+    try {
+      const { data } = await api.patch(
+        "/bag/items",
+        { productId: id, size, quantity },
+        signal ? { signal } : undefined
+      );
+      const payload = data.data || {};
+      setBag(payload.items || []);
+      if (payload.clamped && payload.message) {
+        toast.warning(payload.message);
+      }
+      await syncBagAndAutoCoupon();
+      return payload;
+    } catch (err) {
+      if (err?.name === "CanceledError" || err?.code === "ERR_CANCELED") {
+        return null;
+      }
+      const msg = getApiErrorMessage(err, "Could not update quantity.");
+      setBagError(msg);
+      toast.error(msg);
+      await syncBagAndAutoCoupon();
+      return null;
     }
   };
 
   const updateQuantity = async (id, size, delta) => {
     setBagError("");
-    if (!user || isAdmin) return;
+    if (!user || isAdmin) return null;
     try {
       const { data } = await api.patch("/bag/items", { productId: id, size, delta });
-      setBag(data.data?.items || []);
+      const payload = data.data || {};
+      setBag(payload.items || []);
+      if (payload.clamped && payload.message) {
+        toast.warning(payload.message);
+      }
       await syncBagAndAutoCoupon();
+      return payload;
     } catch (err) {
-      setBagError(getApiErrorMessage(err, "Could not update quantity."));
+      const msg = getApiErrorMessage(err, "Could not update quantity.");
+      setBagError(msg);
+      toast.error(msg);
+      return null;
     }
   };
 
   const toggleWishlist = async (productId) => {
     if (isAdmin) return;
     if (!user) {
+      toast.info("Please sign in to save garments to your wishlist.");
       router.push("/account?next=wishlist");
       return;
     }
@@ -166,7 +243,7 @@ export function ShopProvider({ children }) {
       const { data } = await api.post("/bag/wishlist/toggle", { productId });
       setWishlist(data.data?.wishlist || []);
     } catch {
-      // Non-blocking wishlist toggle failure
+      toast.error("Could not update wishlist right now.");
     }
   };
 
@@ -174,10 +251,14 @@ export function ShopProvider({ children }) {
     const { data } = await api.post("/coupons/validate", { code });
     const coupon = { ...data.data, applyMode: "MANUAL" };
     setAppliedCoupon(coupon);
+    toast.success(`Coupon ${coupon.code} applied.`);
     return coupon;
   };
 
-  const removeCoupon = () => setAppliedCoupon(null);
+  const removeCoupon = () => {
+    setAppliedCoupon(null);
+    toast.info("Coupon removed.");
+  };
 
   const bagCount = useMemo(() => bag.reduce((sum, item) => sum + item.quantity, 0), [bag]);
   const bagSubtotal = useMemo(
@@ -202,6 +283,7 @@ export function ShopProvider({ children }) {
           if (!isAdmin) setIsBagOpen(open);
         },
         addToBag,
+        setItemQuantity,
         updateQuantity,
         toggleWishlist,
         bagCount,

@@ -1,17 +1,22 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { api } from "@/lib/api";
 
 /**
- * Fetches live filtered catalog items from GET /api/v1/products (MongoDB $facet).
- * Starts empty with loading=true so pages render shimmer skeletons cleanly without fake dummy items.
+ * Fetches live backend-filtered catalog items from GET /api/v1/products (MongoDB $facet).
+ * Debounces rapid filter/slider changes (default 350ms) and cancels stale in-flight requests via AbortController.
  */
-export function useLiveCatalog(params) {
+export function useLiveCatalog(params, options = {}) {
+  const debounceMs = typeof options.debounceMs === "number" ? options.debounceMs : 350;
+
   const [items, setItems] = useState([]);
+  const [facets, setFacets] = useState(null);
+  const [meta, setMeta] = useState({ total: 0, page: 1, limit: 24, totalPages: 1 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const isFirstLoadRef = useRef(true);
   const queryKey = JSON.stringify(params || {});
 
   useEffect(() => {
@@ -19,12 +24,22 @@ export function useLiveCatalog(params) {
     setLoading(true);
     setError("");
 
+    // Immediate on initial mount, debounced on subsequent filter changes
+    const delay = isFirstLoadRef.current ? 0 : debounceMs;
+    isFirstLoadRef.current = false;
+
     const timer = setTimeout(() => {
       api
         .get("/products", { params, signal: controller.signal })
         .then(({ data }) => {
-          if (!controller.signal.aborted) {
-            setItems(Array.isArray(data.data?.items) ? data.data.items : []);
+          if (controller.signal.aborted) return;
+          const nextItems = Array.isArray(data.data?.items) ? data.data.items : [];
+          setItems(nextItems);
+          if (data.data?.facets) setFacets(data.data.facets);
+          if (data.meta) {
+            setMeta(data.meta);
+          } else {
+            setMeta({ total: nextItems.length, page: 1, limit: 24, totalPages: 1 });
           }
         })
         .catch((err) => {
@@ -35,16 +50,16 @@ export function useLiveCatalog(params) {
         .finally(() => {
           if (!controller.signal.aborted) setLoading(false);
         });
-    }, 150);
+    }, delay);
 
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queryKey]);
+  }, [queryKey, debounceMs]);
 
-  return { items, loading, error };
+  return { items, facets, meta, loading, error };
 }
 
 /**

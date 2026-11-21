@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { Bodoni_Moda, Lato } from "next/font/google";
 import "./globals.css";
 import SmoothScrollProvider from "@/components/providers/SmoothScrollProvider";
+import { ToastProvider } from "@/context/ToastContext";
 import { ShopProvider } from "@/context/ShopContext";
 import Navbar from "@/components/layout/Navbar";
 import CartDrawer from "@/components/cart/CartDrawer";
@@ -49,17 +50,19 @@ export default function RootLayout({ children }) {
         suppressHydrationWarning
         className="min-h-svh flex flex-col bg-[#ffffff] text-[#1b1717]"
       >
-        <ShopProvider>
-          <Suspense fallback={null}>
-            <UtmTracker />
-          </Suspense>
-          <SmoothScrollProvider>
-            <Navbar />
-            <CartDrawer />
-            <main className="flex-1 w-full">{children}</main>
-            <Footer />
-          </SmoothScrollProvider>
-        </ShopProvider>
+        <ToastProvider>
+          <ShopProvider>
+            <Suspense fallback={null}>
+              <UtmTracker />
+            </Suspense>
+            <SmoothScrollProvider>
+              <Navbar />
+              <CartDrawer />
+              <main className="flex-1 w-full">{children}</main>
+              <Footer />
+            </SmoothScrollProvider>
+          </ShopProvider>
+        </ToastProvider>
       </body>
     </html>
   );

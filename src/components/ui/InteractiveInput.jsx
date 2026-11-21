@@ -34,7 +34,7 @@ export default function InteractiveInput({
   const safeCaretIdx = Math.max(0, Math.min(displayChars.length, caretIndex));
   const prefixChars = displayChars.slice(0, safeCaretIdx);
 
-  // Use text + inputMode="email" so browsers expose selectionStart on email fields for arrow-key cursor tracking
+  // Use text + inputMode="email" so browsers expose selectionStart on email fields
   const nativeType = type === "email" ? "text" : type;
   const nativeInputMode = type === "email" ? "email" : undefined;
 
@@ -61,17 +61,22 @@ export default function InteractiveInput({
     });
   }, []);
 
-  const readNativeCaret = useCallback(() => {
+  const getLiveCaretIndex = useCallback(() => {
     const el = inputRef.current;
-    if (!el) return;
+    if (!el) return displayChars.length;
     try {
       if (typeof el.selectionStart === "number") {
-        setCaretIndex(el.selectionStart);
+        return Math.max(0, Math.min(displayChars.length, el.selectionStart));
       }
     } catch {
-      setCaretIndex(el.value.length);
+      // Fallback for input types without selectionStart
     }
-  }, []);
+    return displayChars.length;
+  }, [displayChars.length]);
+
+  const readNativeCaret = useCallback(() => {
+    setCaretIndex(getLiveCaretIndex());
+  }, [getLiveCaretIndex]);
 
   const syncCaretAndAnimateChar = useCallback(
     (isAddition = false, shouldPluck = false) => {
@@ -81,16 +86,21 @@ export default function InteractiveInput({
       const boxEl = wrapperRef.current;
       if (!trackEl || !caretEl || !boxEl) return;
 
+      // Read live native caret directly (never stale closure state) so the JUST-TYPED character bounces
+      const liveCaret = getLiveCaretIndex();
+
+      // Update hidden prefix measurement span synchronously before measuring width
+      if (measurePrefixRef.current) {
+        measurePrefixRef.current.textContent = displayChars.slice(0, liveCaret);
+      }
+
       const prefixWidth = measurePrefixRef.current ? measurePrefixRef.current.offsetWidth : 0;
       const fullWidth = measureFullRef.current ? measureFullRef.current.offsetWidth : 0;
       const boxWidth = Math.max(1, boxEl.clientWidth - 40);
 
-      // Keep the active caret visible inside the input viewport even when arrowing through long text
       let scrollOffset = 0;
-      if (fullWidth > boxWidth) {
-        if (prefixWidth > boxWidth) {
-          scrollOffset = prefixWidth - boxWidth;
-        }
+      if (fullWidth > boxWidth && prefixWidth > boxWidth) {
+        scrollOffset = prefixWidth - boxWidth;
       }
 
       gsap.to(trackEl, {
@@ -119,7 +129,7 @@ export default function InteractiveInput({
       }
 
       const chars = trackEl.querySelectorAll(".k-char");
-      const typedCharIdx = Math.max(0, safeCaretIdx - 1);
+      const typedCharIdx = Math.min(chars.length - 1, Math.max(0, liveCaret - 1));
       const targetChar = chars[typedCharIdx];
 
       if (isAddition && targetChar) {
@@ -139,10 +149,9 @@ export default function InteractiveInput({
         );
       }
     },
-    [as, pluckString, safeCaretIdx]
+    [as, displayChars, getLiveCaretIndex, pluckString]
   );
 
-  // Sync on value change
   useEffect(() => {
     const nextLen = strValue.length;
     const isAddition = nextLen > prevLenRef.current;
@@ -163,7 +172,6 @@ export default function InteractiveInput({
     });
   }, [strValue, as, readNativeCaret, syncCaretAndAnimateChar, pluckString]);
 
-  // Sync whenever caret moves via ArrowLeft / ArrowRight / Home / End / Click
   useEffect(() => {
     if (as === "textarea") return;
     requestAnimationFrame(() => {
@@ -204,7 +212,6 @@ export default function InteractiveInput({
       aria-hidden="true"
       className="pointer-events-none absolute inset-0 flex items-center overflow-hidden"
     >
-      {/* Hidden measurement spans for exact caret X and full string width */}
       <span
         ref={measurePrefixRef}
         className={`invisible fixed -top-[9999px] left-0 whitespace-pre ${textClass}`}

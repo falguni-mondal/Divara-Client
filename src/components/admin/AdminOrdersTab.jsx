@@ -11,10 +11,12 @@ import {
   RefreshCw,
   CheckCircle2,
   XCircle,
+  Printer,
 } from "lucide-react";
 import { api, getApiErrorMessage } from "@/lib/api";
 import { formatINR } from "@/data/catalogData";
 import { downloadExcelWorkbook } from "@/lib/excelExport";
+import { printOrderInvoice } from "@/lib/printInvoice";
 import ResponsiveImage from "@/components/ui/ResponsiveImage";
 import SmartDateRange from "./SmartDateRange";
 import UrlPagination, { useUrlPageParam } from "./UrlPagination";
@@ -78,7 +80,6 @@ export default function AdminOrdersTab() {
   const [updatingId, setUpdatingId] = useState(null);
   const [exporting, setExporting] = useState(false);
 
-  // Order Details view state
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [courierName, setCourierName] = useState("");
   const [trackingNumber, setTrackingNumber] = useState("");
@@ -87,7 +88,6 @@ export default function AdminOrdersTab() {
   const [actionBusy, setActionBusy] = useState(false);
   const [notice, setNotice] = useState({ type: "", text: "" });
 
-  // Debounce search input to prevent per-keystroke API storms
   useEffect(() => {
     const t = setTimeout(() => {
       setDebouncedSearch(search.trim());
@@ -161,7 +161,6 @@ export default function AdminOrdersTab() {
     }
   };
 
-  // Uses PATCH /admin/orders/:orderId/status with status: "SHIPPED" + courier & tracking
   const handleShipOrder = async (e) => {
     e.preventDefault();
     if (!selectedOrder) return;
@@ -189,7 +188,6 @@ export default function AdminOrdersTab() {
     }
   };
 
-  // Uses PATCH /admin/orders/:orderId/return
   const handleReturnDecision = async (decision) => {
     if (!selectedOrder) return;
     setActionBusy(true);
@@ -361,8 +359,17 @@ export default function AdminOrdersTab() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5">
-            <span className="text-[10px] uppercase tracking-widest text-[#1b1717]/60">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => printOrderInvoice(selectedOrder, { viewer: "admin" })}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 border border-[#1b1717] text-[#1b1717] hover:bg-[#1b1717] hover:text-[#ffffff] text-xs uppercase tracking-widest font-semibold transition-colors cursor-pointer"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>Print Invoice</span>
+            </button>
+
+            <span className="text-[10px] uppercase tracking-widest text-[#1b1717]/60 ml-1">
               Manual Status:
             </span>
             <select
@@ -813,7 +820,7 @@ export default function AdminOrdersTab() {
               <th className="py-3 px-4">Items</th>
               <th className="py-3 px-4">Total (Incl. GST)</th>
               <th className="py-3 px-4">Status</th>
-              <th className="py-3 px-4 text-right">Details</th>
+              <th className="py-3 px-4 text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[#1b1717]/10">
@@ -881,14 +888,25 @@ export default function AdminOrdersTab() {
                     </select>
                   </td>
                   <td className="py-3 px-4 text-right">
-                    <button
-                      type="button"
-                      onClick={() => openOrderDetail(ord)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-[#1b1717]/25 hover:border-[#5d100a] hover:text-[#5d100a] text-[10px] uppercase tracking-widest transition-colors cursor-pointer"
-                    >
-                      <Eye className="w-3.5 h-3.5" />
-                      <span>Open</span>
-                    </button>
+                    <div className="inline-flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => printOrderInvoice(ord, { viewer: "admin" })}
+                        title="Print Tax Invoice"
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[#1b1717]/25 hover:border-[#1b1717] hover:bg-[#1b1717] hover:text-[#ffffff] text-[10px] uppercase tracking-widest transition-colors cursor-pointer"
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                        <span className="hidden xl:inline">Invoice</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openOrderDetail(ord)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-[#1b1717]/25 hover:border-[#5d100a] hover:text-[#5d100a] text-[10px] uppercase tracking-widest transition-colors cursor-pointer"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>Open</span>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))

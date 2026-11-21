@@ -21,6 +21,7 @@ import {
   Truck,
   Check,
   Copy,
+  Printer,
 } from "lucide-react";
 import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
@@ -29,6 +30,7 @@ import ResponsiveImage from "@/components/ui/ResponsiveImage";
 import { api, API_BASE_URL, getApiErrorMessage } from "@/lib/api";
 import { useShop } from "@/context/ShopContext";
 import { formatINR } from "@/data/catalogData";
+import { printOrderInvoice } from "@/lib/printInvoice";
 
 const AdminPanel = dynamic(() => import("@/components/admin/AdminPanel"), {
   ssr: false,
@@ -149,7 +151,6 @@ export default function AccountPage() {
   const pageRef = useRef(null);
   const wasLoggedInRef = useRef(false);
 
-  // Reset auth wizard cleanly whenever a signed-in user (including Super Admin) logs out
   useEffect(() => {
     if (user) {
       wasLoggedInRef.current = true;
@@ -171,7 +172,6 @@ export default function AccountPage() {
     }
   }, [user, authLoading, router]);
 
-  // Strip any admin ?tab=... query params if a guest or non-admin visits /account?tab=...
   useEffect(() => {
     if (authLoading || isAdmin) return;
     if (typeof window !== "undefined") {
@@ -616,13 +616,22 @@ export default function AccountPage() {
                           </p>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
                           <span className="px-2.5 py-1 text-[10px] uppercase tracking-widest border border-[#1b1717]/20">
                             {ord.status}
                           </span>
                           <span className="text-sm font-semibold">
                             {paiseToINR(ord.totalPaise)}
                           </span>
+                          <button
+                            type="button"
+                            onClick={() => printOrderInvoice(ord, { viewer: "customer" })}
+                            title="Print Tax Invoice"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[10px] uppercase tracking-widest border border-[#1b1717]/25 hover:border-[#1b1717] hover:bg-[#1b1717] hover:text-[#ffffff] transition-colors cursor-pointer"
+                          >
+                            <Printer className="w-3 h-3" />
+                            <span>Invoice</span>
+                          </button>
                           <button
                             type="button"
                             onClick={() => setExpandedOrderId(isOpen ? null : ord._id)}
@@ -772,6 +781,15 @@ export default function AccountPage() {
                             </div>
 
                             <div className="flex flex-wrap items-center gap-2.5">
+                              <button
+                                type="button"
+                                onClick={() => printOrderInvoice(ord, { viewer: "customer" })}
+                                className="inline-flex items-center gap-1.5 px-3.5 py-2 border border-[#1b1717] text-[#1b1717] hover:bg-[#1b1717] hover:text-[#ffffff] text-[10px] uppercase tracking-widest transition-colors cursor-pointer"
+                              >
+                                <Printer className="w-3.5 h-3.5" />
+                                <span>Print Tax Invoice</span>
+                              </button>
+
                               {canCancelOrder(ord.status) && (
                                 <button
                                   type="button"

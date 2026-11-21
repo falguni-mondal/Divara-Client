@@ -1,14 +1,16 @@
 "use client";
 
-import React, { useState, useRef, useEffect, Suspense } from "react";
+import React, { useState, useRef, useEffect, useMemo, Suspense } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { Plus, ArrowLeft, Lock } from "lucide-react";
+import { Plus, Minus, ArrowLeft, Lock, Ruler, Loader2 } from "lucide-react";
 import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { formatINR } from "@/data/catalogData";
+import { getSizeMeasurements } from "@/data/sizeChart";
 import { useShop } from "@/context/ShopContext";
+import { useToast } from "@/context/ToastContext";
 import { useSmoothScroll } from "@/components/providers/SmoothScrollProvider";
 import { useSeasonAndYear } from "@/utils/season";
 import { api } from "@/lib/api";
@@ -18,6 +20,8 @@ import ProductReviews from "@/components/shop/ProductReviews";
 if (typeof window !== "undefined") {
   gsap.registerPlugin(ScrollTrigger);
 }
+
+const MAX_QTY_PER_LINE = 10;
 
 function ProductDetailSkeleton() {
   return (
@@ -61,7 +65,6 @@ function getAvailableStockForSize(product, size) {
   const variant = product.variants.find((v) => v.size === size);
   if (!variant) return 0;
 
-  // Storefront DTO returns `availableStock`; raw admin docs return `stockOnHand` & `stockReserved`
   if (typeof variant.availableStock === "number") {
     return Math.max(0, variant.availableStock);
   }
@@ -76,22 +79,37 @@ function ProductDetailContent() {
   const [relatedProducts, setRelatedProducts] = useState([]);
   const [activeImage, setActiveImage] = useState("");
   const [selectedSize, setSelectedSize] = useState("");
+  const [measureUnit, setMeasureUnit] = useState("in"); // "in" | "cm"
   const [openAccordion, setOpenAccordion] = useState("details");
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
-  const { addToBag, isAdmin } = useShop();
+  // Live stock & quantity state
+  const [quantity, setQuantity] = useState(1);
+  const [liveMaxStock, setLiveMaxStock] = useState(null);
+  const [stockLoading, setStockLoading] = useState(false);
+  const [stockChecking, setStockChecking] = useState(false);
+  const [stockHint, setStockHint] = useState("");
+
+  const { addToBag, isAdmin, bag } = useShop();
+  const toast = useToast();
   const { refreshScroll } = useSmoothScroll();
   const { seasonAndYear } = useSeasonAndYear();
+
   const pageRef = useRef(null);
   const accordionTimerRef = useRef(null);
+  const qtyDebounceRef = useRef(null);
+  const stockAbortRef = useRef(null);
 
   useEffect(() => {
     return () => {
       if (accordionTimerRef.current) clearTimeout(accordionTimerRef.current);
+      if (qtyDebounceRef.current) clearTimeout(qtyDebounceRef.current);
+      if (stockAbortRef.current) stockAbortRef.current.abort();
     };
   }, []);
 
+  // Load product detail
   useEffect(() => {
     if (!slug) return;
     let active = true;
@@ -134,6 +152,132 @@ function ProductDetailContent() {
     };
   }, [slug]);
 
+  // Existing qty of this product+size already in user's bag
+  const inBagQtyForSelected = useMemo(() => {
+    if (!product || !selectedSize) return 0;
+    const match = (bag || []).find(
+      (item) =>
+        (item.productId === product._id ||
+          item.slug === product.slug ||
+          item.id === product.slug) &&
+        item.size === selectedSize
+    );
+    return match ? Number(match.quantity || 0) : 0;
+  }, [bag, product, selectedSize]);
+
+  // Initial live stock verification on product/size load (uncached backend route)
+  useEffect(() => {
+    if (!product?._id && !product?.slug) return;
+    if (!selectedSize) return;
+
+    let active = true;
+    setStockLoading(true);
+    setStockHint("");
+    setQuantity(1);
+
+    const fallbackStock = getAvailableStockForSize(product, selectedSize);
+
+    api
+      .post("/products/stock/validate", {
+        items: [
+          {
+            productId: product._id || product.slug,
+            size: selectedSize,
+            quantity: 1,
+          },
+        ],
+      })
+      .then(({ data }) => {
+        if (!active) return;
+        const item = data?.data?.results?.[0];
+        if (item && typeof item.availableStock === "number") {
+          setLiveMaxStock(Math.max(0, item.availableStock));
+        } else {
+          setLiveMaxStock(fallbackStock);
+        }
+      })
+      .catch(() => {
+        if (!active) return;
+        setLiveMaxStock(fallbackStock);
+      })
+      .finally(() => {
+        if (active) setStockLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [product, selectedSize]);
+
+  // Debounced backend stock validation whenever quantity changes
+  const scheduleLiveQtyCheck = (targetQty) => {
+    if (!product || !selectedSize) return;
+    if (qtyDebounceRef.current) clearTimeout(qtyDebounceRef.current);
+
+    qtyDebounceRef.current = setTimeout(async () => {
+      if (stockAbortRef.current) stockAbortRef.current.abort();
+      const controller = new AbortController();
+      stockAbortRef.current = controller;
+
+      setStockChecking(true);
+      try {
+        const totalRequested = targetQty + inBagQtyForSelected;
+        const { data } = await api.post(
+          "/products/stock/validate",
+          {
+            items: [
+              {
+                productId: product._id || product.slug,
+                size: selectedSize,
+                quantity: totalRequested,
+              },
+            ],
+          },
+          { signal: controller.signal }
+        );
+
+        const item = data?.data?.results?.[0];
+        if (item && typeof item.availableStock === "number") {
+          const freshAvailable = Math.max(0, item.availableStock);
+          setLiveMaxStock(freshAvailable);
+
+          const maxCanAdd = Math.max(
+            0,
+            Math.min(MAX_QTY_PER_LINE, freshAvailable) - inBagQtyForSelected
+          );
+
+          if (maxCanAdd === 0) {
+            setQuantity(1);
+            setStockHint(
+              freshAvailable === 0
+                ? "This size just sold out."
+                : `You already have all ${freshAvailable} available in your bag.`
+            );
+            toast.warning(
+              freshAvailable === 0
+                ? "This size is no longer in stock."
+                : `Max available stock (${freshAvailable}) is already in your bag.`
+            );
+          } else if (targetQty > maxCanAdd) {
+            setQuantity(maxCanAdd);
+            setStockHint(`Adjusted to ${maxCanAdd} based on live inventory.`);
+            toast.warning(
+              `Only ${freshAvailable} total in stock — quantity adjusted to ${maxCanAdd}.`
+            );
+          } else {
+            setStockHint("");
+          }
+        }
+      } catch (err) {
+        if (err?.name !== "CanceledError" && err?.code !== "ERR_CANCELED") {
+          // Non-blocking fallback to cached stock
+        }
+      } finally {
+        setStockChecking(false);
+      }
+    }, 320);
+  };
+
   useGSAP(
     () => {
       if (loading || !product) return;
@@ -162,6 +306,12 @@ function ProductDetailContent() {
     },
     { scope: pageRef, dependencies: [product?.slug, loading] }
   );
+
+  // Selected size measurements (auto-updates on every size or unit toggle)
+  const sizeMeasurements = useMemo(() => {
+    if (!product || !selectedSize) return null;
+    return getSizeMeasurements(product.category, selectedSize, measureUnit);
+  }, [product, selectedSize, measureUnit]);
 
   if (loading) {
     return <ProductDetailSkeleton />;
@@ -195,8 +345,47 @@ function ProductDetailContent() {
     accordionTimerRef.current = setTimeout(() => refreshScroll(), 320);
   };
 
-  const selectedSizeStock = getAvailableStockForSize(product, selectedSize);
-  const isOutOfStock = selectedSizeStock !== null && selectedSizeStock <= 0;
+  const fallbackStock = getAvailableStockForSize(product, selectedSize);
+  const effectiveStock =
+    typeof liveMaxStock === "number" ? liveMaxStock : fallbackStock;
+  const maxAddable =
+    typeof effectiveStock === "number"
+      ? Math.max(0, Math.min(MAX_QTY_PER_LINE, effectiveStock) - inBagQtyForSelected)
+      : MAX_QTY_PER_LINE;
+
+  const isOutOfStock = effectiveStock !== null && effectiveStock <= 0;
+  const isBagCapped = !isOutOfStock && maxAddable <= 0;
+  const canIncrement =
+    !isAdmin && !isOutOfStock && !stockLoading && quantity < maxAddable;
+  const canDecrement = !isAdmin && !isOutOfStock && quantity > 1;
+
+  const handleQtyDelta = (delta) => {
+    if (isAdmin || isOutOfStock) return;
+    const next = Math.max(1, Math.min(MAX_QTY_PER_LINE, quantity + delta));
+    if (next === quantity) return;
+    setQuantity(next);
+    setStockHint("");
+    scheduleLiveQtyCheck(next);
+  };
+
+  const handleQtyDirectInput = (e) => {
+    const raw = e.target.value.replace(/[^0-9]/g, "");
+    if (!raw) {
+      setQuantity(1);
+      scheduleLiveQtyCheck(1);
+      return;
+    }
+    const parsed = Math.max(1, Math.min(MAX_QTY_PER_LINE, parseInt(raw, 10) || 1));
+    setQuantity(parsed);
+    setStockHint("");
+    scheduleLiveQtyCheck(parsed);
+  };
+
+  const handleAddToBag = () => {
+    if (isAdmin || isOutOfStock || isBagCapped) return;
+    const safeQty = Math.max(1, Math.min(quantity, maxAddable || 1));
+    addToBag(product, selectedSize, safeQty);
+  };
 
   const galleryImages =
     Array.isArray(product.gallery) && product.gallery.length > 0
@@ -310,26 +499,28 @@ function ProductDetailContent() {
               </div>
             </div>
 
+            {/* Size Selector */}
             <div className="pdp-reveal mt-6">
               <div className="flex items-center justify-between mb-2.5">
                 <span className="block text-xs uppercase tracking-widest text-[#1b1717]/75">
                   Select Size
                 </span>
-                {selectedSizeStock !== null && (
+                {effectiveStock !== null && (
                   <span
-                    className={`text-[10px] uppercase tracking-widest ${
-                      selectedSizeStock === 0
+                    className={`text-[10px] uppercase tracking-widest flex items-center gap-1.5 ${
+                      effectiveStock === 0
                         ? "text-[#5d100a] font-semibold"
-                        : selectedSizeStock <= 3
+                        : effectiveStock <= 3
                         ? "text-[#5d100a]"
                         : "text-[#1b1717]/55"
                     }`}
                   >
-                    {selectedSizeStock === 0
+                    {stockLoading && <Loader2 className="w-3 h-3 animate-spin" />}
+                    {effectiveStock === 0
                       ? "Out of Stock"
-                      : selectedSizeStock <= 3
-                      ? `Only ${selectedSizeStock} left`
-                      : "In Stock"}
+                      : effectiveStock <= 3
+                      ? `Only ${effectiveStock} left`
+                      : `${effectiveStock} In Stock`}
                   </span>
                 )}
               </div>
@@ -343,10 +534,10 @@ function ProductDetailContent() {
                     <button
                       key={size}
                       type="button"
-                      disabled={isAdmin || sizeSoldOut}
+                      disabled={sizeSoldOut}
                       onClick={() => setSelectedSize(size)}
                       className={`px-4 py-2 text-xs uppercase tracking-wider border rounded-[2px] transition-colors ${
-                        isAdmin || sizeSoldOut
+                        sizeSoldOut
                           ? "border-[#1b1717]/15 text-[#1b1717]/35 bg-[#1b1717]/5 cursor-not-allowed line-through"
                           : selectedSize === size
                           ? "bg-[#5d100a] text-[#ffffff] border-[#5d100a] cursor-pointer"
@@ -358,23 +549,157 @@ function ProductDetailContent() {
                   );
                 })}
               </div>
+
+              {/* Dynamic Selected Size Measurements Helper Card */}
+              {sizeMeasurements && (
+                <div className="mt-4 p-4 border border-[#1b1717]/12 bg-[#faf8f6] rounded-[2px]">
+                  <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-[#1b1717]/10">
+                    <div className="flex items-center gap-2">
+                      <Ruler className="w-3.5 h-3.5 text-[#5d100a]" />
+                      <span className="text-[11px] uppercase tracking-widest font-semibold text-[#1b1717]">
+                        Size {sizeMeasurements.size} Measurements
+                      </span>
+                    </div>
+
+                    <div className="inline-flex border border-[#1b1717]/20 rounded-[2px] overflow-hidden text-[10px] uppercase tracking-wider">
+                      <button
+                        type="button"
+                        onClick={() => setMeasureUnit("in")}
+                        className={`px-2 py-0.5 transition-colors cursor-pointer ${
+                          measureUnit === "in"
+                            ? "bg-[#1b1717] text-[#ffffff]"
+                            : "bg-[#ffffff] text-[#1b1717]/70 hover:text-[#1b1717]"
+                        }`}
+                      >
+                        IN
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMeasureUnit("cm")}
+                        className={`px-2 py-0.5 transition-colors cursor-pointer ${
+                          measureUnit === "cm"
+                            ? "bg-[#1b1717] text-[#ffffff]"
+                            : "bg-[#ffffff] text-[#1b1717]/70 hover:text-[#1b1717]"
+                        }`}
+                      >
+                        CM
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2.5">
+                    {sizeMeasurements.metrics.map((metric) => (
+                      <div key={metric.label} className="flex flex-col">
+                        <span className="text-[10px] uppercase tracking-wider text-[#1b1717]/55">
+                          {metric.label}
+                        </span>
+                        <span className="text-xs font-medium text-[#1b1717] mt-0.5">
+                          {metric.value}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {sizeMeasurements.fitNote && (
+                    <p className="mt-3 pt-2.5 border-t border-[#1b1717]/10 text-[11px] leading-relaxed text-[#1b1717]/65">
+                      {sizeMeasurements.fitNote}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
-            <div className="pdp-reveal mt-8">
+            {/* Live Stock-Validated Quantity Selector */}
+            {!isAdmin && !isOutOfStock && (
+              <div className="pdp-reveal mt-6">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs uppercase tracking-widest text-[#1b1717]/75">
+                    Quantity
+                  </span>
+                  {stockChecking ? (
+                    <span className="text-[10px] uppercase tracking-widest text-[#1b1717]/55 inline-flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Verifying stock...
+                    </span>
+                  ) : inBagQtyForSelected > 0 ? (
+                    <span className="text-[10px] uppercase tracking-wider text-[#5d100a]">
+                      {inBagQtyForSelected} already in bag
+                    </span>
+                  ) : null}
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className="inline-flex items-center border border-[#1b1717]/25 rounded-[2px]">
+                    <button
+                      type="button"
+                      disabled={!canDecrement}
+                      onClick={() => handleQtyDelta(-1)}
+                      aria-label="Decrease quantity"
+                      className={`w-10 h-10 flex items-center justify-center transition-colors ${
+                        canDecrement
+                          ? "text-[#1b1717] hover:bg-[#1b1717]/5 cursor-pointer"
+                          : "text-[#1b1717]/25 cursor-not-allowed"
+                      }`}
+                    >
+                      <Minus className="w-3.5 h-3.5" />
+                    </button>
+
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      aria-label="Quantity"
+                      value={quantity}
+                      onChange={handleQtyDirectInput}
+                      disabled={isBagCapped}
+                      className="w-12 h-10 text-center text-xs font-medium bg-transparent border-x border-[#1b1717]/15 outline-none"
+                    />
+
+                    <button
+                      type="button"
+                      disabled={!canIncrement}
+                      onClick={() => handleQtyDelta(1)}
+                      aria-label="Increase quantity"
+                      className={`w-10 h-10 flex items-center justify-center transition-colors ${
+                        canIncrement
+                          ? "text-[#1b1717] hover:bg-[#1b1717]/5 cursor-pointer"
+                          : "text-[#1b1717]/25 cursor-not-allowed"
+                      }`}
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {!canIncrement && !stockLoading && maxAddable > 0 && (
+                    <span className="text-[11px] text-[#5d100a]">
+                      Max available ({maxAddable}) reached
+                    </span>
+                  )}
+                </div>
+
+                {stockHint && (
+                  <p className="mt-1.5 text-[11px] text-[#5d100a]">{stockHint}</p>
+                )}
+              </div>
+            )}
+
+            {/* Add to Bag Button */}
+            <div className="pdp-reveal mt-7">
               <button
                 type="button"
-                disabled={isAdmin || isOutOfStock}
-                onClick={() => !isAdmin && !isOutOfStock && addToBag(product, selectedSize)}
-                aria-disabled={isAdmin || isOutOfStock}
+                disabled={isAdmin || isOutOfStock || isBagCapped || stockChecking}
+                onClick={handleAddToBag}
+                aria-disabled={isAdmin || isOutOfStock || isBagCapped || stockChecking}
                 title={
                   isAdmin
                     ? "Shopping is disabled for Admin accounts"
                     : isOutOfStock
                     ? "Selected size is out of stock"
+                    : isBagCapped
+                    ? "Maximum available stock is already in your bag"
                     : "Add to Bag"
                 }
                 className={`w-full py-3.5 px-6 text-xs uppercase tracking-widest font-semibold rounded-[2px] transition-colors duration-300 flex items-center justify-center gap-2 ${
-                  isAdmin || isOutOfStock
+                  isAdmin || isOutOfStock || isBagCapped || stockChecking
                     ? "bg-[#1b1717]/10 text-[#1b1717]/40 border border-[#1b1717]/20 cursor-not-allowed select-none"
                     : "bg-[#1b1717] text-[#ffffff] hover:bg-[#5d100a] cursor-pointer"
                 }`}
@@ -386,8 +711,13 @@ function ProductDetailContent() {
                   </>
                 ) : isOutOfStock ? (
                   <span>Currently Out of Stock</span>
+                ) : isBagCapped ? (
+                  <span>Max Stock Already in Bag</span>
                 ) : (
-                  <span>Add to Bag — {formatINR(product.price)}</span>
+                  <span>
+                    Add {quantity > 1 ? `${quantity} ` : ""}to Bag —{" "}
+                    {formatINR(product.price * quantity)}
+                  </span>
                 )}
               </button>
               {isAdmin && (
