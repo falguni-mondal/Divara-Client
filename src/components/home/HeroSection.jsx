@@ -144,7 +144,8 @@ export default function HeroSection() {
         {/* Automatically filters by currentSeason when navigating to /collections */}
         <div className="hero-cta-item">
           <Link
-            href={`/collections?season=${encodeURIComponent(currentSeason)}`}
+            // href={`/collections?season=${encodeURIComponent(currentSeason)}`}
+            href={`/collections`}
             id="cta-btn"
             className="inline-block py-[3.5vw] px-[8vw] sm:py-2.5 sm:px-7 lg:py-3 lg:px-8 text-[3vw] sm:text-xs lg:text-[12px] font-semibold rounded-[2px] bg-[#ffffff] text-[#1b1717] hover:bg-[#ffffff]/85 transition-colors duration-300"
           >

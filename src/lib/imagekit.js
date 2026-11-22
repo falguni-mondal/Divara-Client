@@ -23,6 +23,16 @@ export function ikUrl(src, { width = 800, height = null, quality = 80 } = {}) {
 }
 
 /**
+ * Generates a tiny (~1-2 KB) blurred Low-Quality Image Placeholder (LQIP) URL
+ * via ImageKit's edge blur transform so high-res PDP/card images fade in smoothly.
+ */
+export function ikBlurUrl(src, { width = 48, quality = 20, blur = 8 } = {}) {
+  if (!src || !isImageKitUrl(src)) return null;
+  const clean = src.split("?")[0];
+  return `${clean}?tr=w-${width},q-${quality},bl-${blur},f-auto`;
+}
+
+/**
  * Generates an HTML responsive srcSet string for ImageKit assets so mobile,
  * tablet, and desktop screens each download the exact optimal resolution.
  */

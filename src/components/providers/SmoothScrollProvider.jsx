@@ -4,6 +4,7 @@ import React, {
   createContext,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useCallback,
@@ -19,8 +20,10 @@ if (typeof window !== "undefined") {
   gsap.registerPlugin(ScrollTrigger);
 }
 
+const useIsoLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect;
+
 const SmoothScrollContext = createContext({
-  lenis: null,
   refreshScroll: () => {},
   stopScroll: () => {},
   startScroll: () => {},
@@ -29,50 +32,83 @@ const SmoothScrollContext = createContext({
 
 export const useSmoothScroll = () => useContext(SmoothScrollContext);
 
-/**
- * Isolated inside <Suspense> so `usePathname()` never blocks Next.js 16 prerendering.
- */
-function RouteChangeScrollReset({ lenisRef }) {
+// Isolated inside <Suspense> so usePathname() never blocks Next.js 16.4 prerendering
+function ScrollRouteController({ lenisRef, nativeLockCountRef }) {
   const pathname = usePathname();
+  const isPopStateRef = useRef(false);
+  const [isDesktop, setIsDesktop] = useState(true);
 
   useEffect(() => {
-    if (lenisRef.current) {
-      lenisRef.current.scrollTo(0, { immediate: true });
-      const timer = setTimeout(() => {
-        lenisRef.current?.resize();
-        ScrollTrigger.refresh();
-      }, 150);
-      return () => clearTimeout(timer);
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const update = () => setIsDesktop(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+
+  // Desktop: Lenis ON everywhere.
+  // Mobile (< 1024px): Lenis OFF only on /collections and /shop/* for native Back scroll.
+  const isShopRoute =
+    pathname === "/collections" || pathname.startsWith("/shop/");
+  const shouldEnableLenis = isDesktop || !isShopRoute;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const prevRestoration = window.history.scrollRestoration;
+    try {
+      window.history.scrollRestoration = "manual";
+    } catch {
+      // Ignore locked scrollRestoration
     }
-  }, [pathname, lenisRef]);
 
-  return null;
-}
+    const handlePopState = () => {
+      isPopStateRef.current = true;
+      window.__DIVARA_POPSTATE_AT__ = Date.now();
+    };
 
-export default function SmoothScrollProvider({ children }) {
-  const lenisRef = useRef(null);
-  const [lenisInstance, setLenisInstance] = useState(null);
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+      try {
+        window.history.scrollRestoration = prevRestoration || "auto";
+      } catch {
+        // Ignore
+      }
+    };
+  }, []);
 
-  const refreshScroll = useCallback(() => {
+  useIsoLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+
+    // Clear any leftover native drawer scroll lock on route change
+    nativeLockCountRef.current = 0;
+    document.documentElement.style.overflow = "";
+    document.body.style.overflow = "";
+
+    const recentPop =
+      isPopStateRef.current ||
+      (typeof window.__DIVARA_POPSTATE_AT__ === "number" &&
+        Date.now() - window.__DIVARA_POPSTATE_AT__ < 2000);
+
+    isPopStateRef.current = false;
+
+    if (recentPop && pathname === "/collections") return;
+
+    window.scrollTo(0, 0);
     if (lenisRef.current) {
       lenisRef.current.resize();
+      lenisRef.current.scrollTo(0, { immediate: true, force: true });
     }
-    ScrollTrigger.refresh();
-  }, []);
-
-  const stopScroll = useCallback(() => {
-    lenisRef.current?.stop();
-  }, []);
-
-  const startScroll = useCallback(() => {
-    lenisRef.current?.start();
-  }, []);
-
-  const scrollTo = useCallback((target, options = {}) => {
-    lenisRef.current?.scrollTo(target, options);
-  }, []);
+  }, [pathname, lenisRef, nativeLockCountRef]);
 
   useEffect(() => {
+    if (typeof window === "undefined" || !shouldEnableLenis) {
+      lenisRef.current = null;
+      return;
+    }
+
     const lenis = new Lenis({
       lerp: 0.09,
       duration: 1.15,
@@ -83,107 +119,114 @@ export default function SmoothScrollProvider({ children }) {
     });
 
     lenisRef.current = lenis;
-    setLenisInstance(lenis);
+    lenis.on("scroll", ScrollTrigger.update);
 
-    // Synchronize Lenis scroll events with GSAP ScrollTrigger
-    // and apply dynamic vertical velocity shift on elements with [data-velocity]
-    let velocityResetTimer = null;
-    lenis.on("scroll", (e) => {
-      ScrollTrigger.update();
-
-      const velocityNodes = document.querySelectorAll("[data-velocity]");
-      if (velocityNodes.length > 0) {
-        const clampedVelocity = Math.max(-35, Math.min(35, e.velocity * 1.8));
-        velocityNodes.forEach((node) => {
-          const factor = parseFloat(node.getAttribute("data-velocity") || "1");
-          gsap.to(node, {
-            y: clampedVelocity * factor,
-            duration: 0.35,
-            ease: "power2.out",
-            overwrite: "auto",
-          });
-        });
-
-        if (velocityResetTimer) clearTimeout(velocityResetTimer);
-        velocityResetTimer = setTimeout(() => {
-          velocityNodes.forEach((node) => {
-            gsap.to(node, {
-              y: 0,
-              duration: 0.6,
-              ease: "power3.out",
-              overwrite: "auto",
-            });
-          });
-        }, 90);
-      }
-    });
-
-    // Drive Lenis from GSAP's ticker so both share the exact same RAF loop
-    const updateTicker = (time) => {
-      lenis.raf(time * 1000);
-    };
+    const updateTicker = (time) => lenis.raf(time * 1000);
     gsap.ticker.add(updateTicker);
     gsap.ticker.lagSmoothing(0);
 
-    // Debounced resize & ScrollTrigger refresh to prevent the "stuck scroll on increasing page height" bug
     let resizeTimer = null;
-    const handleHeightChange = () => {
-      if (resizeTimer) clearTimeout(resizeTimer);
+    const handleResize = () => {
+      clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         lenis.resize();
         ScrollTrigger.refresh();
       }, 120);
     };
 
-    const resizeObserver = new ResizeObserver(() => {
-      handleHeightChange();
-    });
-
-    resizeObserver.observe(document.documentElement);
+    const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(document.body);
-
-    // Listen for late-loading images or videos that expand layout height after initial mount
-    const handleMediaLoad = (e) => {
-      if (
-        e.target &&
-        (e.target.tagName === "IMG" || e.target.tagName === "VIDEO")
-      ) {
-        handleHeightChange();
-      }
-    };
-    window.addEventListener("load", handleHeightChange);
-    document.addEventListener("load", handleMediaLoad, true);
-    document.addEventListener("loadedmetadata", handleMediaLoad, true);
+    window.addEventListener("load", handleResize);
 
     return () => {
-      if (resizeTimer) clearTimeout(resizeTimer);
-      if (velocityResetTimer) clearTimeout(velocityResetTimer);
+      clearTimeout(resizeTimer);
       resizeObserver.disconnect();
-      window.removeEventListener("load", handleHeightChange);
-      document.removeEventListener("load", handleMediaLoad, true);
-      document.removeEventListener("loadedmetadata", handleMediaLoad, true);
+      window.removeEventListener("load", handleResize);
       gsap.ticker.remove(updateTicker);
       lenis.destroy();
       lenisRef.current = null;
-      setLenisInstance(null);
     };
+  }, [shouldEnableLenis, lenisRef]);
+
+  return null;
+}
+
+export default function SmoothScrollProvider({ children }) {
+  const lenisRef = useRef(null);
+  const nativeLockCountRef = useRef(0);
+
+  const refreshScroll = useCallback(() => {
+    lenisRef.current?.resize();
+    ScrollTrigger.refresh();
+  }, []);
+
+  const stopScroll = useCallback(() => {
+    if (lenisRef.current) {
+      lenisRef.current.stop();
+      return;
+    }
+    if (typeof document !== "undefined") {
+      nativeLockCountRef.current += 1;
+      document.documentElement.style.overflow = "hidden";
+      document.body.style.overflow = "hidden";
+    }
+  }, []);
+
+  const startScroll = useCallback(() => {
+    if (lenisRef.current) {
+      lenisRef.current.start();
+      return;
+    }
+    if (typeof document !== "undefined") {
+      nativeLockCountRef.current = Math.max(0, nativeLockCountRef.current - 1);
+      if (nativeLockCountRef.current === 0) {
+        document.documentElement.style.overflow = "";
+        document.body.style.overflow = "";
+      }
+    }
+  }, []);
+
+  const scrollTo = useCallback((target, options = {}) => {
+    if (lenisRef.current) {
+      if (options.immediate) lenisRef.current.resize();
+      lenisRef.current.scrollTo(target, options);
+      return;
+    }
+    if (typeof window === "undefined") return;
+
+    const offset = Number(options.offset) || 0;
+    let top = 0;
+
+    if (typeof target === "number") {
+      top = target + offset;
+    } else if (typeof target === "string") {
+      const el = document.querySelector(target);
+      if (!el) return;
+      top = el.getBoundingClientRect().top + window.scrollY + offset;
+    } else if (target?.getBoundingClientRect) {
+      top = target.getBoundingClientRect().top + window.scrollY + offset;
+    } else {
+      return;
+    }
+
+    window.scrollTo({
+      top: Math.max(0, Math.round(top)),
+      behavior: options.immediate ? "auto" : "smooth",
+    });
   }, []);
 
   const contextValue = useMemo(
-    () => ({
-      lenis: lenisInstance,
-      refreshScroll,
-      stopScroll,
-      startScroll,
-      scrollTo,
-    }),
-    [lenisInstance, refreshScroll, stopScroll, startScroll, scrollTo]
+    () => ({ refreshScroll, stopScroll, startScroll, scrollTo }),
+    [refreshScroll, stopScroll, startScroll, scrollTo]
   );
 
   return (
     <SmoothScrollContext.Provider value={contextValue}>
       <Suspense fallback={null}>
-        <RouteChangeScrollReset lenisRef={lenisRef} />
+        <ScrollRouteController
+          lenisRef={lenisRef}
+          nativeLockCountRef={nativeLockCountRef}
+        />
       </Suspense>
       {children}
     </SmoothScrollContext.Provider>

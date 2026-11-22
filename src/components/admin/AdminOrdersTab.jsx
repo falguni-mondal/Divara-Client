@@ -247,6 +247,7 @@ export default function AdminOrdersTab() {
     }
   };
 
+  // Exports ALL orders matching the active filters (status, Profit, date range, search) across every page
   const handleExportExcel = async () => {
     setExporting(true);
     setNotice({ type: "", text: "" });
@@ -261,6 +262,9 @@ export default function AdminOrdersTab() {
         },
       });
       const allFiltered = data.data?.orders || [];
+      const totalMatching = data.data?.totalMatching ?? allFiltered.length;
+      const truncated = Boolean(data.data?.truncated);
+
       const suffix =
         dateRange.from || dateRange.to
           ? `_${dateRange.from || "start"}_to_${dateRange.to || "now"}`
@@ -318,6 +322,13 @@ export default function AdminOrdersTab() {
           { label: "Referral Partner", value: (r) => r.attribution?.referralPerson || "" },
         ],
         rows: allFiltered,
+      });
+
+      setNotice({
+        type: truncated ? "error" : "success",
+        text: truncated
+          ? `Exported the latest ${allFiltered.length.toLocaleString("en-IN")} of ${totalMatching.toLocaleString("en-IN")} matching orders. Narrow the date range to export the rest.`
+          : `Exported all ${allFiltered.length.toLocaleString("en-IN")} matching order${allFiltered.length === 1 ? "" : "s"} across all pages.`,
       });
     } catch (err) {
       setNotice({
@@ -738,12 +749,16 @@ export default function AdminOrdersTab() {
 
         <button
           type="button"
-          disabled={exporting}
+          disabled={exporting || pagination.total === 0}
           onClick={handleExportExcel}
           className="inline-flex items-center gap-2 px-4 py-2.5 border border-[#1b1717] text-[#1b1717] hover:bg-[#1b1717] hover:text-[#ffffff] text-xs uppercase tracking-widest font-semibold transition-colors cursor-pointer disabled:opacity-50"
         >
           <FileSpreadsheet className="w-3.5 h-3.5" />
-          <span>{exporting ? "Exporting..." : "Export CA GST Excel"}</span>
+          <span>
+            {exporting
+              ? "Exporting All Pages..."
+              : `Export All (${pagination.total}) — CA GST Excel`}
+          </span>
         </button>
       </div>
 
@@ -802,6 +817,7 @@ export default function AdminOrdersTab() {
             className="border border-[#1b1717]/25 px-3.5 py-2 text-xs uppercase bg-[#ffffff]"
           >
             <option value="ALL">All Statuses</option>
+            <option value="PROFIT">Profit (Paid / Processing / Shipped / Delivered)</option>
             {STATUSES.map((s) => (
               <option key={s} value={s}>
                 {s}

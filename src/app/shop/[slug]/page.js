@@ -1,6 +1,14 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useMemo, Suspense } from "react";
+import React, {
+  useState,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useCallback,
+  Suspense,
+} from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Plus, Minus, ArrowLeft, Lock, Ruler, Loader2 } from "lucide-react";
@@ -14,12 +22,16 @@ import { useToast } from "@/context/ToastContext";
 import { useSmoothScroll } from "@/components/providers/SmoothScrollProvider";
 import { useSeasonAndYear } from "@/utils/season";
 import { api } from "@/lib/api";
+import { ikUrl } from "@/lib/imagekit";
 import ResponsiveImage from "@/components/ui/ResponsiveImage";
 import ProductReviews from "@/components/shop/ProductReviews";
 
 if (typeof window !== "undefined") {
   gsap.registerPlugin(ScrollTrigger);
 }
+
+const useIsoLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 const MAX_QTY_PER_LINE = 10;
 
@@ -79,12 +91,11 @@ function ProductDetailContent() {
   const [relatedProducts, setRelatedProducts] = useState([]);
   const [activeImage, setActiveImage] = useState("");
   const [selectedSize, setSelectedSize] = useState("");
-  const [measureUnit, setMeasureUnit] = useState("in"); // "in" | "cm"
+  const [measureUnit, setMeasureUnit] = useState("in");
   const [openAccordion, setOpenAccordion] = useState("details");
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
-  // Live stock & quantity state
   const [quantity, setQuantity] = useState(1);
   const [liveMaxStock, setLiveMaxStock] = useState(null);
   const [stockLoading, setStockLoading] = useState(false);
@@ -93,13 +104,63 @@ function ProductDetailContent() {
 
   const { addToBag, isAdmin, bag } = useShop();
   const toast = useToast();
-  const { refreshScroll } = useSmoothScroll();
+  const { refreshScroll, scrollTo } = useSmoothScroll();
   const { seasonAndYear } = useSeasonAndYear();
 
   const pageRef = useRef(null);
   const accordionTimerRef = useRef(null);
   const qtyDebounceRef = useRef(null);
   const stockAbortRef = useRef(null);
+  const preloadedImgsRef = useRef(new Set());
+  const userScrolledPdpRef = useRef(false);
+
+  // Lock PDP to top on entry AND right after data finishes loading (unless user already scrolled)
+  useIsoLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+    userScrolledPdpRef.current = false;
+
+    const markScrolled = () => {
+      userScrolledPdpRef.current = true;
+    };
+    window.addEventListener("wheel", markScrolled, { passive: true, once: true });
+    window.addEventListener("touchstart", markScrolled, { passive: true, once: true });
+
+    const snapTop = () => {
+      if (userScrolledPdpRef.current) return;
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+      window.scrollTo(0, 0);
+      scrollTo(0, { immediate: true, force: true });
+    };
+
+    snapTop();
+    const rafId = window.requestAnimationFrame(snapTop);
+    const t = setTimeout(snapTop, 100);
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      clearTimeout(t);
+      window.removeEventListener("wheel", markScrolled);
+      window.removeEventListener("touchstart", markScrolled);
+    };
+  }, [slug, scrollTo]);
+
+  useIsoLayoutEffect(() => {
+    if (loading || userScrolledPdpRef.current || typeof window === "undefined") return;
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    window.scrollTo(0, 0);
+    scrollTo(0, { immediate: true, force: true });
+  }, [loading, scrollTo]);
+
+  const preloadGalleryImage = useCallback((rawUrl) => {
+    if (!rawUrl || typeof window === "undefined") return;
+    const highRes = ikUrl(rawUrl, { width: 1080, quality: 85 });
+    if (!highRes || preloadedImgsRef.current.has(highRes)) return;
+    preloadedImgsRef.current.add(highRes);
+    const pre = new window.Image();
+    pre.src = highRes;
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -109,7 +170,6 @@ function ProductDetailContent() {
     };
   }, []);
 
-  // Load product detail
   useEffect(() => {
     if (!slug) return;
     let active = true;
@@ -152,7 +212,6 @@ function ProductDetailContent() {
     };
   }, [slug]);
 
-  // Existing qty of this product+size already in user's bag
   const inBagQtyForSelected = useMemo(() => {
     if (!product || !selectedSize) return 0;
     const match = (bag || []).find(
@@ -165,7 +224,6 @@ function ProductDetailContent() {
     return match ? Number(match.quantity || 0) : 0;
   }, [bag, product, selectedSize]);
 
-  // Initial live stock verification on product/size load (uncached backend route)
   useEffect(() => {
     if (!product?._id && !product?.slug) return;
     if (!selectedSize) return;
@@ -209,7 +267,6 @@ function ProductDetailContent() {
     };
   }, [product, selectedSize]);
 
-  // Debounced backend stock validation whenever quantity changes
   const scheduleLiveQtyCheck = (targetQty) => {
     if (!product || !selectedSize) return;
     if (qtyDebounceRef.current) clearTimeout(qtyDebounceRef.current);
@@ -270,7 +327,7 @@ function ProductDetailContent() {
         }
       } catch (err) {
         if (err?.name !== "CanceledError" && err?.code !== "ERR_CANCELED") {
-          // Non-blocking fallback to cached stock
+          // Non-blocking fallback
         }
       } finally {
         setStockChecking(false);
@@ -307,7 +364,6 @@ function ProductDetailContent() {
     { scope: pageRef, dependencies: [product?.slug, loading] }
   );
 
-  // Selected size measurements (auto-updates on every size or unit toggle)
   const sizeMeasurements = useMemo(() => {
     if (!product || !selectedSize) return null;
     return getSizeMeasurements(product.category, selectedSize, measureUnit);
@@ -420,6 +476,8 @@ function ProductDetailContent() {
         <div className="pdp-reveal mb-6">
           <Link
             href="/collections"
+            scroll={false}
+            data-preserve-catalog="true"
             className="inline-flex items-center gap-2 text-xs uppercase tracking-widest text-[#1b1717]/70 hover:text-[#5d100a] transition-colors"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
@@ -434,6 +492,8 @@ function ProductDetailContent() {
                 <button
                   key={i}
                   type="button"
+                  onMouseEnter={() => preloadGalleryImage(img)}
+                  onFocus={() => preloadGalleryImage(img)}
                   onClick={() => setActiveImage(img)}
                   className={`shrink-0 w-16 sm:w-20 aspect-[3/4] overflow-hidden border transition-all cursor-pointer ${
                     activeImage === img
@@ -774,6 +834,7 @@ function ProductDetailContent() {
                 <Link
                   key={item._id || item.id || item.slug}
                   href={`/shop/${item.slug}`}
+                  scroll={false}
                   className="pdp-related-reveal group flex flex-col"
                 >
                   <div className="w-full aspect-[3/4] overflow-hidden bg-[#1b1717]/5">

@@ -8,6 +8,7 @@ import Navbar from "@/components/layout/Navbar";
 import CartDrawer from "@/components/cart/CartDrawer";
 import Footer from "@/components/layout/Footer";
 import UtmTracker from "@/components/analytics/UtmTracker";
+import RouteProgressBar from "@/components/ui/RouteProgressBar";
 
 const bodoniModa = Bodoni_Moda({
   variable: "--font-bodoni",
@@ -53,12 +54,13 @@ export default function RootLayout({ children }) {
         <ToastProvider>
           <ShopProvider>
             <Suspense fallback={null}>
+              <RouteProgressBar />
               <UtmTracker />
             </Suspense>
             <SmoothScrollProvider>
               <Navbar />
               <CartDrawer />
-              <main className="flex-1 w-full">{children}</main>
+              <main className="flex-1 w-full min-h-svh">{children}</main>
               <Footer />
             </SmoothScrollProvider>
           </ShopProvider>

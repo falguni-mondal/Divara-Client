@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import Script from "next/script";
 import { useRouter } from "next/navigation";
-import { MapPin, Check, X } from "lucide-react";
+import { MapPin, Check, X, BookmarkPlus, Loader2 } from "lucide-react";
 import { useShop } from "@/context/ShopContext";
 import { useToast } from "@/context/ToastContext";
 import { useSmoothScroll } from "@/components/providers/SmoothScrollProvider";
@@ -13,6 +13,26 @@ import { formatINR } from "@/data/catalogData";
 import ResponsiveImage from "@/components/ui/ResponsiveImage";
 import InteractiveInput from "@/components/ui/InteractiveInput";
 import { getStoredAttribution } from "@/components/analytics/UtmTracker";
+
+const ADDRESS_LABEL_PRESETS = ["Home", "Work", "Other"];
+
+function normalizeAddrPart(val) {
+  return String(val || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function matchesSavedAddress(saved, form) {
+  if (!saved || !form) return false;
+  return (
+    normalizeAddrPart(saved.line1) === normalizeAddrPart(form.line1) &&
+    normalizeAddrPart(saved.postalCode) === normalizeAddrPart(form.postalCode) &&
+    normalizeAddrPart(saved.city) === normalizeAddrPart(form.city) &&
+    normalizeAddrPart(saved.phone).replace(/\D/g, "") ===
+      normalizeAddrPart(form.phone).replace(/\D/g, "")
+  );
+}
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -43,6 +63,13 @@ export default function CheckoutPage() {
     postalCode: "",
     country: "India",
   });
+
+  // Save-address modal state (shown only when not using a saved address)
+  const [showSaveAddrModal, setShowSaveAddrModal] = useState(false);
+  const [saveLabelPreset, setSaveLabelPreset] = useState("Home");
+  const [customAddrLabel, setCustomAddrLabel] = useState("");
+  const [savingAddrBeforePay, setSavingAddrBeforePay] = useState(false);
+
   const [submitting, setSubmitting] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
@@ -50,7 +77,6 @@ export default function CheckoutPage() {
 
   const paymentCompletedRef = useRef(false);
 
-  // Scroll to top when entering verifying or confirmed state
   useEffect(() => {
     if (!verifying && !confirmedOrder) return;
     scrollTo(0, { immediate: true });
@@ -76,9 +102,16 @@ export default function CheckoutPage() {
     });
   };
 
+  // Editing any shipping field detaches the saved-address selection so we know it's new/modified
+  const updateShippingField = (field, value) => {
+    if (selectedAddressId !== null && field !== "email") {
+      setSelectedAddressId(null);
+    }
+    setShipping((prev) => ({ ...prev, [field]: value }));
+  };
+
   useEffect(() => {
     if (!user || isAdmin) return;
-    // Hydrate fresh stock & prices when landing on checkout
     syncBagAndAutoCoupon();
 
     setShipping((prev) => ({
@@ -107,8 +140,7 @@ export default function CheckoutPage() {
   const cgstInr = isIntraState ? Math.floor(totalGstInr / 2) : 0;
   const sgstInr = isIntraState ? totalGstInr - cgstInr : 0;
 
-  const handleCheckout = async (e) => {
-    e.preventDefault();
+  const proceedToPayment = async () => {
     setErrorMsg("");
 
     if (typeof window === "undefined" || !window.Razorpay) {
@@ -173,7 +205,6 @@ export default function CheckoutPage() {
         },
         theme: { color: "#5d100a" },
         modal: {
-          // Immediately release the 15-minute stock hold if the customer closes Razorpay without paying
           ondismiss: async () => {
             if (paymentCompletedRef.current) return;
             try {
@@ -240,6 +271,70 @@ export default function CheckoutPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleCheckoutSubmit = async (e) => {
+    e.preventDefault();
+    setErrorMsg("");
+
+    const isUsingSavedAddress =
+      Boolean(selectedAddressId) ||
+      savedAddresses.some((addr) => matchesSavedAddress(addr, shipping));
+
+    if (!isUsingSavedAddress) {
+      setSaveLabelPreset("Home");
+      setCustomAddrLabel("");
+      setShowSaveAddrModal(true);
+      return;
+    }
+
+    await proceedToPayment();
+  };
+
+  const handleSaveAddressAndPay = async () => {
+    const finalLabel =
+      saveLabelPreset === "Other"
+        ? customAddrLabel.trim() || "Other"
+        : saveLabelPreset;
+
+    setSavingAddrBeforePay(true);
+    try {
+      const { data } = await api.post("/auth/addresses", {
+        label: finalLabel,
+        fullName: shipping.fullName.trim(),
+        phone: shipping.phone.trim(),
+        line1: shipping.line1.trim(),
+        line2: shipping.line2.trim(),
+        city: shipping.city.trim(),
+        state: shipping.state.trim(),
+        postalCode: shipping.postalCode.trim(),
+        country: shipping.country || "India",
+        isDefault: savedAddresses.length === 0,
+      });
+
+      const updatedList = data?.data?.addresses || [];
+      if (updatedList.length > 0) {
+        setSavedAddresses(updatedList);
+        const newest =
+          updatedList.find((a) => matchesSavedAddress(a, shipping)) ||
+          updatedList[updatedList.length - 1];
+        if (newest?._id) setSelectedAddressId(newest._id);
+      }
+      toast.success(`Shipping address saved as "${finalLabel}".`);
+    } catch {
+      // Never block payment if saving the address fails
+      toast.warning("Could not save address to your profile, continuing to payment...");
+    } finally {
+      setSavingAddrBeforePay(false);
+      setShowSaveAddrModal(false);
+    }
+
+    await proceedToPayment();
+  };
+
+  const handleSkipSaveAndPay = async () => {
+    setShowSaveAddrModal(false);
+    await proceedToPayment();
   };
 
   if (authLoading || verifying) {
@@ -331,7 +426,7 @@ export default function CheckoutPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14">
-            <form onSubmit={handleCheckout} className="lg:col-span-7 space-y-5">
+            <form onSubmit={handleCheckoutSubmit} className="lg:col-span-7 space-y-5">
               {savedAddresses.length > 0 && (
                 <div className="border border-[#1b1717]/15 p-4 space-y-3">
                   <div className="flex items-center justify-between">
@@ -401,13 +496,13 @@ export default function CheckoutPage() {
                   label="Full Name *"
                   required
                   value={shipping.fullName}
-                  onChange={(e) => setShipping({ ...shipping, fullName: e.target.value })}
+                  onChange={(e) => updateShippingField("fullName", e.target.value)}
                 />
                 <InteractiveInput
                   label="Phone Number *"
                   required
                   value={shipping.phone}
-                  onChange={(e) => setShipping({ ...shipping, phone: e.target.value })}
+                  onChange={(e) => updateShippingField("phone", e.target.value)}
                   placeholder="+91 98765 43210"
                 />
               </div>
@@ -417,21 +512,21 @@ export default function CheckoutPage() {
                 type="email"
                 required
                 value={shipping.email}
-                onChange={(e) => setShipping({ ...shipping, email: e.target.value })}
+                onChange={(e) => updateShippingField("email", e.target.value)}
               />
 
               <InteractiveInput
                 label="Address Line 1 *"
                 required
                 value={shipping.line1}
-                onChange={(e) => setShipping({ ...shipping, line1: e.target.value })}
+                onChange={(e) => updateShippingField("line1", e.target.value)}
                 placeholder="House / Flat, Street"
               />
 
               <InteractiveInput
                 label="Address Line 2 (Optional)"
                 value={shipping.line2}
-                onChange={(e) => setShipping({ ...shipping, line2: e.target.value })}
+                onChange={(e) => updateShippingField("line2", e.target.value)}
                 placeholder="Landmark / Locality"
               />
 
@@ -440,19 +535,19 @@ export default function CheckoutPage() {
                   label="City *"
                   required
                   value={shipping.city}
-                  onChange={(e) => setShipping({ ...shipping, city: e.target.value })}
+                  onChange={(e) => updateShippingField("city", e.target.value)}
                 />
                 <InteractiveInput
                   label="State *"
                   required
                   value={shipping.state}
-                  onChange={(e) => setShipping({ ...shipping, state: e.target.value })}
+                  onChange={(e) => updateShippingField("state", e.target.value)}
                 />
                 <InteractiveInput
                   label="PIN Code *"
                   required
                   value={shipping.postalCode}
-                  onChange={(e) => setShipping({ ...shipping, postalCode: e.target.value })}
+                  onChange={(e) => updateShippingField("postalCode", e.target.value)}
                 />
               </div>
 
@@ -475,12 +570,14 @@ export default function CheckoutPage() {
               <div className="divide-y divide-[#1b1717]/10">
                 {bag.map((item) => (
                   <div key={`${item.id}-${item.size}`} className="py-3 flex items-center gap-3.5">
-                    <ResponsiveImage
-                      src={item.image}
-                      alt={item.title}
-                      preset="thumb"
-                      className="w-12 h-16 object-cover bg-[#1b1717]/5 shrink-0"
-                    />
+                    <div className="w-12 h-16 shrink-0 bg-[#1b1717]/5 overflow-hidden">
+                      <ResponsiveImage
+                        src={item.image}
+                        alt={item.title}
+                        preset="thumb"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{item.title}</p>
                       <p className="text-[11px] text-[#1b1717]/60">
@@ -548,6 +645,111 @@ export default function CheckoutPage() {
           </div>
         )}
       </div>
+
+      {/* Save New Shipping Address Prompt Modal */}
+      {showSaveAddrModal && (
+        <div
+          data-lenis-prevent
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !savingAddrBeforePay) {
+              setShowSaveAddrModal(false);
+            }
+          }}
+          className="fixed inset-0 z-[1020] bg-black/55 backdrop-blur-[2px] flex items-center justify-center p-4"
+        >
+          <div className="w-full max-w-md bg-[#ffffff] border border-[#1b1717]/20 p-6 shadow-2xl space-y-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <span className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-[0.2em] text-[#5d100a] font-semibold">
+                  <BookmarkPlus className="w-3.5 h-3.5" />
+                  <span>Faster Future Checkout</span>
+                </span>
+                <h2 className="heading-serif text-xl font-normal mt-1">
+                  Save This Shipping Address?
+                </h2>
+              </div>
+              <button
+                type="button"
+                disabled={savingAddrBeforePay}
+                onClick={() => setShowSaveAddrModal(false)}
+                aria-label="Close modal"
+                className="p-1 text-[#1b1717]/50 hover:text-[#5d100a] cursor-pointer disabled:opacity-40"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 bg-[#faf8f6] border border-[#1b1717]/12 text-xs space-y-0.5">
+              <p className="font-semibold text-[#1b1717]">{shipping.fullName}</p>
+              <p className="text-[#1b1717]/75">
+                {[shipping.line1, shipping.line2, shipping.city, shipping.state, shipping.postalCode]
+                  .filter(Boolean)
+                  .join(", ")}
+              </p>
+              <p className="text-[#1b1717]/60">{shipping.phone}</p>
+            </div>
+
+            <div className="space-y-2.5">
+              <span className="block text-[10px] uppercase tracking-widest text-[#1b1717]/65 font-semibold">
+                Save Address As
+              </span>
+              <div className="flex items-center gap-2">
+                {ADDRESS_LABEL_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    disabled={savingAddrBeforePay}
+                    onClick={() => setSaveLabelPreset(preset)}
+                    className={`flex-1 py-2 text-xs uppercase tracking-wider border rounded-[2px] transition-colors cursor-pointer ${
+                      saveLabelPreset === preset
+                        ? "bg-[#5d100a] text-[#ffffff] border-[#5d100a] font-medium"
+                        : "border-[#1b1717]/25 text-[#1b1717] hover:border-[#1b1717]"
+                    }`}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+
+              {saveLabelPreset === "Other" && (
+                <input
+                  type="text"
+                  maxLength={40}
+                  value={customAddrLabel}
+                  onChange={(e) => setCustomAddrLabel(e.target.value)}
+                  placeholder="Optional name (e.g., Parents' Home, Studio)"
+                  className="w-full border border-[#1b1717]/25 px-3 py-2 text-xs outline-none focus:border-[#5d100a]"
+                />
+              )}
+            </div>
+
+            <div className="flex flex-col gap-2.5 pt-1">
+              <button
+                type="button"
+                disabled={savingAddrBeforePay}
+                onClick={handleSaveAddressAndPay}
+                className="w-full py-3 bg-[#5d100a] hover:bg-[#1b1717] text-[#ffffff] text-xs uppercase tracking-widest font-semibold transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {savingAddrBeforePay && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>
+                  {savingAddrBeforePay
+                    ? "Saving Address..."
+                    : "Save Address & Continue to Pay"}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                disabled={savingAddrBeforePay}
+                onClick={handleSkipSaveAndPay}
+                className="w-full py-2.5 border border-[#1b1717]/25 hover:border-[#1b1717] text-[#1b1717] text-xs uppercase tracking-widest transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Don&apos;t Save Address, Just Pay
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
