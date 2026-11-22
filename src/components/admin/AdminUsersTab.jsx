@@ -24,19 +24,30 @@ import { formatINR } from "@/data/catalogData";
 import { downloadExcelWorkbook } from "@/lib/excelExport";
 import ResponsiveImage from "@/components/ui/ResponsiveImage";
 import UrlPagination, { useUrlPageParam } from "./UrlPagination";
+import ProfileIntelligencePanel from "./ProfileIntelligencePanel";
+import AdminVisitorsView from "./AdminVisitorsView";
 
 function formatDate(d) {
   if (!d) return "Never";
-  return new Date(d).toLocaleString("en-IN", {
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return "Never";
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
     day: "2-digit",
-    month: "short",
+    month: "2-digit",
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  });
+    second: "2-digit",
+    hour12: true,
+  }).formatToParts(dt);
+  const get = (t) => parts.find((p) => p.type === t)?.value || "";
+  const period = (get("dayPeriod") || "").toUpperCase();
+  return `${get("day")}/${get("month")}/${get("year")} ${get("hour")}:${get("minute")}:${get("second")} ${period}`.trim();
 }
 
 export default function AdminUsersTab() {
+  const [activeSubTab, setActiveSubTab] = useState("accounts"); // "accounts" | "visitors"
   const [page, setPage] = useUrlPageParam("page");
   const [users, setUsers] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
@@ -90,8 +101,10 @@ export default function AdminUsersTab() {
   }, [status, page, debouncedSearch]);
 
   useEffect(() => {
-    loadUsers();
-  }, [loadUsers]);
+    if (activeSubTab === "accounts") {
+      loadUsers();
+    }
+  }, [activeSubTab, loadUsers]);
 
   const openUserDetail = async (userId) => {
     setDetailLoading(true);
@@ -407,8 +420,10 @@ export default function AdminUsersTab() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="border border-[#1b1717]/15 p-4 bg-[#ffffff]">
             <span className="text-[10px] uppercase tracking-widest text-[#1b1717]/55">Active Since</span>
-            <p className="text-sm font-semibold mt-1">{formatDate(u.createdAt)}</p>
-            <p className="text-[10px] text-[#1b1717]/55 mt-1">Last Login: {formatDate(u.lastLoginAt)}</p>
+            <p className="text-xs font-semibold font-mono mt-1">{formatDate(u.createdAt)}</p>
+            <p className="text-[10px] text-[#1b1717]/55 font-mono mt-1">
+              Last Login: {formatDate(u.lastLoginAt)}
+            </p>
           </div>
           <div className="border border-[#1b1717]/15 p-4 bg-[#ffffff]">
             <span className="text-[10px] uppercase tracking-widest text-[#1b1717]/55">Lifetime Spend</span>
@@ -430,6 +445,9 @@ export default function AdminUsersTab() {
             <p className="text-[10px] text-[#1b1717]/55 mt-1">{s.reviewsCount || 0} Reviews written</p>
           </div>
         </div>
+
+        {/* Behavioral Intelligence, Interest Scores, Style DNA & Complete Activity Timeline */}
+        <ProfileIntelligencePanel type="account" id={u._id} />
 
         {/* Live Cart + Saved Addresses */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -534,7 +552,7 @@ export default function AdminUsersTab() {
                   {detail.orders.map((ord) => (
                     <tr key={ord._id}>
                       <td className="py-2.5 pr-4 font-semibold">{ord.orderNumber}</td>
-                      <td className="py-2.5 pr-4 text-[#1b1717]/65">{formatDate(ord.createdAt)}</td>
+                      <td className="py-2.5 pr-4 text-[#1b1717]/65 font-mono text-[11px]">{formatDate(ord.createdAt)}</td>
                       <td className="py-2.5 pr-4">{ord.items?.length || 0} item(s)</td>
                       <td className="py-2.5 pr-4">
                         <span className="px-2 py-0.5 text-[10px] uppercase border border-[#1b1717]/20">
@@ -606,253 +624,289 @@ export default function AdminUsersTab() {
     );
   }
 
-  // USERS LIST VIEW
+  // USERS & ANONYMOUS VISITORS HUB
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <span className="text-[10px] uppercase tracking-[0.22em] text-[#5d100a] font-semibold">
-            Customer CRM &amp; Moderation
+            Customer CRM, Visitors &amp; Intelligence
           </span>
           <h1 className="heading-serif text-2xl sm:text-3xl font-normal mt-1">
-            Users ({pagination.total})
+            {activeSubTab === "accounts"
+              ? `Registered Accounts (${pagination.total})`
+              : "Anonymous Visitors"}
           </h1>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          <button
-            type="button"
-            onClick={() => setShowCreateForm((p) => !p)}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-[#1b1717] text-[#ffffff] hover:bg-[#5d100a] text-xs uppercase tracking-widest font-semibold transition-colors cursor-pointer"
-          >
-            {showCreateForm ? <X className="w-3.5 h-3.5" /> : <UserPlus className="w-3.5 h-3.5" />}
-            <span>{showCreateForm ? "Close Form" : "Add Customer"}</span>
-          </button>
+        {activeSubTab === "accounts" && (
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => setShowCreateForm((p) => !p)}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-[#1b1717] text-[#ffffff] hover:bg-[#5d100a] text-xs uppercase tracking-widest font-semibold transition-colors cursor-pointer"
+            >
+              {showCreateForm ? <X className="w-3.5 h-3.5" /> : <UserPlus className="w-3.5 h-3.5" />}
+              <span>{showCreateForm ? "Close Form" : "Add Customer"}</span>
+            </button>
 
-          <button
-            type="button"
-            disabled={exporting}
-            onClick={handleExportExcel}
-            className="inline-flex items-center gap-2 px-4 py-2.5 border border-[#1b1717] text-[#1b1717] hover:bg-[#1b1717] hover:text-[#ffffff] text-xs uppercase tracking-widest font-semibold transition-colors cursor-pointer disabled:opacity-50"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5" />
-            <span>{exporting ? "Exporting..." : "Export Excel"}</span>
-          </button>
-        </div>
+            <button
+              type="button"
+              disabled={exporting}
+              onClick={handleExportExcel}
+              className="inline-flex items-center gap-2 px-4 py-2.5 border border-[#1b1717] text-[#1b1717] hover:bg-[#1b1717] hover:text-[#ffffff] text-xs uppercase tracking-widest font-semibold transition-colors cursor-pointer disabled:opacity-50"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>{exporting ? "Exporting..." : "Export Excel"}</span>
+            </button>
+          </div>
+        )}
       </div>
 
-      {notice.text && (
-        <div
-          className={`p-3 text-xs border ${
-            notice.type === "error"
-              ? "border-[#5d100a]/40 bg-[#5d100a]/5 text-[#5d100a]"
-              : "border-[#1b1717]/25 bg-[#1b1717]/[0.03] text-[#1b1717]"
+      {/* Accounts vs Anonymous Visitors Sub-Tab Bar */}
+      <div className="flex items-center gap-2 border-b border-[#1b1717]/15 pb-3">
+        <button
+          type="button"
+          onClick={() => setActiveSubTab("accounts")}
+          className={`px-4 py-2 text-xs uppercase tracking-widest transition-colors cursor-pointer ${
+            activeSubTab === "accounts"
+              ? "bg-[#1b1717] text-[#ffffff]"
+              : "border border-[#1b1717]/20 text-[#1b1717]/75 hover:border-[#1b1717]"
           }`}
         >
-          {notice.text}
-        </div>
-      )}
-
-      {showCreateForm && (
-        <form
-          onSubmit={handleCreateUser}
-          className="border border-[#1b1717]/20 bg-[#ffffff] p-5 space-y-4"
+          Registered Accounts
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSubTab("visitors")}
+          className={`px-4 py-2 text-xs uppercase tracking-widest transition-colors cursor-pointer ${
+            activeSubTab === "visitors"
+              ? "bg-[#1b1717] text-[#ffffff]"
+              : "border border-[#1b1717]/20 text-[#1b1717]/75 hover:border-[#1b1717]"
+          }`}
         >
-          <h2 className="heading-serif text-lg">Create Customer Account</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <input
-              type="text"
-              required
-              placeholder="Full Name *"
-              value={createForm.fullName}
-              onChange={(e) => setCreateForm((p) => ({ ...p, fullName: e.target.value }))}
-              className="border border-[#1b1717]/25 px-3 py-2 text-xs outline-none focus:border-[#5d100a]"
-            />
-            <input
-              type="email"
-              required
-              placeholder="Email Address *"
-              value={createForm.email}
-              onChange={(e) => setCreateForm((p) => ({ ...p, email: e.target.value }))}
-              className="border border-[#1b1717]/25 px-3 py-2 text-xs outline-none focus:border-[#5d100a]"
-            />
-            <input
-              type="tel"
-              placeholder="Phone (Optional)"
-              value={createForm.phone}
-              onChange={(e) => setCreateForm((p) => ({ ...p, phone: e.target.value }))}
-              className="border border-[#1b1717]/25 px-3 py-2 text-xs outline-none focus:border-[#5d100a]"
-            />
-            <input
-              type="password"
-              required
-              minLength={8}
-              placeholder="Temporary Password (8+ chars) *"
-              value={createForm.password}
-              onChange={(e) => setCreateForm((p) => ({ ...p, password: e.target.value }))}
-              className="border border-[#1b1717]/25 px-3 py-2 text-xs outline-none focus:border-[#5d100a]"
-            />
+          Anonymous Visitors
+        </button>
+      </div>
+
+      {activeSubTab === "visitors" ? (
+        <AdminVisitorsView />
+      ) : (
+        <>
+          {notice.text && (
+            <div
+              className={`p-3 text-xs border ${
+                notice.type === "error"
+                  ? "border-[#5d100a]/40 bg-[#5d100a]/5 text-[#5d100a]"
+                  : "border-[#1b1717]/25 bg-[#1b1717]/[0.03] text-[#1b1717]"
+              }`}
+            >
+              {notice.text}
+            </div>
+          )}
+
+          {showCreateForm && (
+            <form
+              onSubmit={handleCreateUser}
+              className="border border-[#1b1717]/20 bg-[#ffffff] p-5 space-y-4"
+            >
+              <h2 className="heading-serif text-lg">Create Customer Account</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <input
+                  type="text"
+                  required
+                  placeholder="Full Name *"
+                  value={createForm.fullName}
+                  onChange={(e) => setCreateForm((p) => ({ ...p, fullName: e.target.value }))}
+                  className="border border-[#1b1717]/25 px-3 py-2 text-xs outline-none focus:border-[#5d100a]"
+                />
+                <input
+                  type="email"
+                  required
+                  placeholder="Email Address *"
+                  value={createForm.email}
+                  onChange={(e) => setCreateForm((p) => ({ ...p, email: e.target.value }))}
+                  className="border border-[#1b1717]/25 px-3 py-2 text-xs outline-none focus:border-[#5d100a]"
+                />
+                <input
+                  type="tel"
+                  placeholder="Phone (Optional)"
+                  value={createForm.phone}
+                  onChange={(e) => setCreateForm((p) => ({ ...p, phone: e.target.value }))}
+                  className="border border-[#1b1717]/25 px-3 py-2 text-xs outline-none focus:border-[#5d100a]"
+                />
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  placeholder="Temporary Password (8+ chars) *"
+                  value={createForm.password}
+                  onChange={(e) => setCreateForm((p) => ({ ...p, password: e.target.value }))}
+                  className="border border-[#1b1717]/25 px-3 py-2 text-xs outline-none focus:border-[#5d100a]"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={busy}
+                className="px-5 py-2.5 bg-[#5d100a] text-[#ffffff] hover:bg-[#1b1717] text-xs uppercase tracking-widest cursor-pointer disabled:opacity-50"
+              >
+                {busy ? "Creating..." : "Create Account"}
+              </button>
+            </form>
+          )}
+
+          {/* Filters */}
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex-1 min-w-[220px]">
+              <label className="block text-[9px] uppercase tracking-[0.18em] text-[#1b1717]/60 font-semibold mb-1">
+                Search Customers
+              </label>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#1b1717]/45" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setPage(1);
+                  }}
+                  placeholder="Name, email, phone..."
+                  className="w-full pl-8 pr-3 py-2 text-xs border border-[#1b1717]/25 outline-none focus:border-[#5d100a]"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[9px] uppercase tracking-[0.18em] text-[#1b1717]/60 font-semibold mb-1">
+                Account Status
+              </label>
+              <select
+                value={status}
+                onChange={(e) => {
+                  setStatus(e.target.value);
+                  setPage(1);
+                }}
+                className="border border-[#1b1717]/25 px-3.5 py-2 text-xs uppercase bg-[#ffffff]"
+              >
+                <option value="ALL">All Users</option>
+                <option value="ACTIVE">Active Only</option>
+                <option value="BANNED">Banned / Blocked</option>
+              </select>
+            </div>
           </div>
-          <button
-            type="submit"
-            disabled={busy}
-            className="px-5 py-2.5 bg-[#5d100a] text-[#ffffff] hover:bg-[#1b1717] text-xs uppercase tracking-widest cursor-pointer disabled:opacity-50"
-          >
-            {busy ? "Creating..." : "Create Account"}
-          </button>
-        </form>
+
+          {/* Table */}
+          <div className="border border-[#1b1717]/15 overflow-x-auto bg-[#ffffff]">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-[#1b1717] text-[#ffffff] text-[10px] uppercase tracking-widest">
+                  <th className="py-3 px-4">Customer</th>
+                  <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-4">Member Since / Last Active</th>
+                  <th className="py-3 px-4">Orders &amp; LTV</th>
+                  <th className="py-3 px-4">Live Cart</th>
+                  <th className="py-3 px-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#1b1717]/10">
+                {loading ? (
+                  Array.from({ length: 5 }).map((_, idx) => (
+                    <tr key={idx}>
+                      <td colSpan={6} className="py-4 px-4">
+                        <div className="h-5 w-full bg-[#1b1717]/[0.06] animate-pulse" />
+                      </td>
+                    </tr>
+                  ))
+                ) : users.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-8 text-center text-[#1b1717]/55">
+                      No customers match your filters.
+                    </td>
+                  </tr>
+                ) : (
+                  users.map((u) => (
+                    <tr key={u._id} className="hover:bg-[#1b1717]/[0.015]">
+                      <td className="py-3 px-4">
+                        <button
+                          type="button"
+                          onClick={() => openUserDetail(u._id)}
+                          className="font-semibold text-left hover:text-[#5d100a] hover:underline cursor-pointer"
+                        >
+                          {u.fullName || "Unnamed Client"}
+                        </button>
+                        <div className="text-[11px] text-[#1b1717]/65">{u.email}</div>
+                        {u.phone && <div className="text-[10px] text-[#1b1717]/50">{u.phone}</div>}
+                      </td>
+                      <td className="py-3 px-4">
+                        <span
+                          className={`px-2 py-0.5 text-[10px] uppercase tracking-widest font-semibold ${
+                            u.isActive
+                              ? "bg-[#1b1717]/10 text-[#1b1717]"
+                              : "bg-[#5d100a] text-[#ffffff]"
+                          }`}
+                        >
+                          {u.isActive ? "Active" : "Banned"}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-[11px] font-mono">
+                        <div>Joined: {formatDate(u.createdAt)}</div>
+                        <div className="text-[#1b1717]/55">Last: {formatDate(u.lastLoginAt)}</div>
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="font-semibold">{formatINR(u.stats?.totalSpentInr || 0)}</div>
+                        <div className="text-[10px] text-[#1b1717]/55">
+                          {u.stats?.orderCount || 0} order(s)
+                        </div>
+                      </td>
+                      <td className="py-3 px-4">
+                        {u.stats?.cartItemCount > 0 ? (
+                          <>
+                            <div className="font-medium text-[#5d100a]">
+                              {u.stats.cartItemCount} item(s)
+                            </div>
+                            <div className="text-[10px] text-[#1b1717]/60">
+                              {formatINR(u.stats.cartValueInr)}
+                            </div>
+                          </>
+                        ) : (
+                          <span className="text-[#1b1717]/40">Empty</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <div className="inline-flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => openUserDetail(u._id)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[#1b1717]/25 hover:border-[#5d100a] hover:text-[#5d100a] text-[10px] uppercase tracking-widest cursor-pointer"
+                          >
+                            <Eye className="w-3 h-3" />
+                            <span>View</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleToggleBan(u)}
+                            className="px-2.5 py-1.5 border border-[#5d100a]/40 text-[#5d100a] hover:bg-[#5d100a] hover:text-[#ffffff] text-[10px] uppercase tracking-widest cursor-pointer"
+                          >
+                            {u.isActive ? "Ban" : "Unban"}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <UrlPagination
+            page={page}
+            totalPages={pagination.totalPages}
+            totalItems={pagination.total}
+            onPageChange={setPage}
+          />
+        </>
       )}
-
-      {/* Filters */}
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="flex-1 min-w-[220px]">
-          <label className="block text-[9px] uppercase tracking-[0.18em] text-[#1b1717]/60 font-semibold mb-1">
-            Search Customers
-          </label>
-          <div className="relative">
-            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#1b1717]/45" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              placeholder="Name, email, phone..."
-              className="w-full pl-8 pr-3 py-2 text-xs border border-[#1b1717]/25 outline-none focus:border-[#5d100a]"
-            />
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-[9px] uppercase tracking-[0.18em] text-[#1b1717]/60 font-semibold mb-1">
-            Account Status
-          </label>
-          <select
-            value={status}
-            onChange={(e) => {
-              setStatus(e.target.value);
-              setPage(1);
-            }}
-            className="border border-[#1b1717]/25 px-3.5 py-2 text-xs uppercase bg-[#ffffff]"
-          >
-            <option value="ALL">All Users</option>
-            <option value="ACTIVE">Active Only</option>
-            <option value="BANNED">Banned / Blocked</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Table */}
-      <div className="border border-[#1b1717]/15 overflow-x-auto bg-[#ffffff]">
-        <table className="w-full text-left border-collapse text-xs">
-          <thead>
-            <tr className="bg-[#1b1717] text-[#ffffff] text-[10px] uppercase tracking-widest">
-              <th className="py-3 px-4">Customer</th>
-              <th className="py-3 px-4">Status</th>
-              <th className="py-3 px-4">Member Since / Last Active</th>
-              <th className="py-3 px-4">Orders &amp; LTV</th>
-              <th className="py-3 px-4">Live Cart</th>
-              <th className="py-3 px-4 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[#1b1717]/10">
-            {loading ? (
-              Array.from({ length: 5 }).map((_, idx) => (
-                <tr key={idx}>
-                  <td colSpan={6} className="py-4 px-4">
-                    <div className="h-5 w-full bg-[#1b1717]/[0.06] animate-pulse" />
-                  </td>
-                </tr>
-              ))
-            ) : users.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="py-8 text-center text-[#1b1717]/55">
-                  No customers match your filters.
-                </td>
-              </tr>
-            ) : (
-              users.map((u) => (
-                <tr key={u._id} className="hover:bg-[#1b1717]/[0.015]">
-                  <td className="py-3 px-4">
-                    <button
-                      type="button"
-                      onClick={() => openUserDetail(u._id)}
-                      className="font-semibold text-left hover:text-[#5d100a] hover:underline cursor-pointer"
-                    >
-                      {u.fullName || "Unnamed Client"}
-                    </button>
-                    <div className="text-[11px] text-[#1b1717]/65">{u.email}</div>
-                    {u.phone && <div className="text-[10px] text-[#1b1717]/50">{u.phone}</div>}
-                  </td>
-                  <td className="py-3 px-4">
-                    <span
-                      className={`px-2 py-0.5 text-[10px] uppercase tracking-widest font-semibold ${
-                        u.isActive
-                          ? "bg-[#1b1717]/10 text-[#1b1717]"
-                          : "bg-[#5d100a] text-[#ffffff]"
-                      }`}
-                    >
-                      {u.isActive ? "Active" : "Banned"}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 text-[11px]">
-                    <div>Joined: {formatDate(u.createdAt)}</div>
-                    <div className="text-[#1b1717]/55">Last: {formatDate(u.lastLoginAt)}</div>
-                  </td>
-                  <td className="py-3 px-4">
-                    <div className="font-semibold">{formatINR(u.stats?.totalSpentInr || 0)}</div>
-                    <div className="text-[10px] text-[#1b1717]/55">
-                      {u.stats?.orderCount || 0} order(s)
-                    </div>
-                  </td>
-                  <td className="py-3 px-4">
-                    {u.stats?.cartItemCount > 0 ? (
-                      <>
-                        <div className="font-medium text-[#5d100a]">
-                          {u.stats.cartItemCount} item(s)
-                        </div>
-                        <div className="text-[10px] text-[#1b1717]/60">
-                          {formatINR(u.stats.cartValueInr)}
-                        </div>
-                      </>
-                    ) : (
-                      <span className="text-[#1b1717]/40">Empty</span>
-                    )}
-                  </td>
-                  <td className="py-3 px-4 text-right">
-                    <div className="inline-flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => openUserDetail(u._id)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-[#1b1717]/25 hover:border-[#5d100a] hover:text-[#5d100a] text-[10px] uppercase tracking-widest cursor-pointer"
-                      >
-                        <Eye className="w-3 h-3" />
-                        <span>View</span>
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => handleToggleBan(u)}
-                        className="px-2.5 py-1.5 border border-[#5d100a]/40 text-[#5d100a] hover:bg-[#5d100a] hover:text-[#ffffff] text-[10px] uppercase tracking-widest cursor-pointer"
-                      >
-                        {u.isActive ? "Ban" : "Unban"}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      <UrlPagination
-        page={page}
-        totalPages={pagination.totalPages}
-        totalItems={pagination.total}
-        onPageChange={setPage}
-      />
     </div>
   );
 }

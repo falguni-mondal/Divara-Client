@@ -3,8 +3,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 
-const COLLECTIONS_SNAPSHOT_KEY = "divara:collections:snapshot:v1";
-
 export default function RouteProgressBar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -71,19 +69,6 @@ export default function RouteProgressBar() {
       try {
         const nextUrl = new URL(href, window.location.origin);
         if (nextUrl.origin !== window.location.origin) return;
-
-        // Clear any saved /collections Back-scroll snapshot when navigating forward
-        // to /collections (e.g. Navbar/Footer), unless explicitly marked to preserve it
-        if (
-          nextUrl.pathname === "/collections" &&
-          anchor.getAttribute("data-preserve-catalog") !== "true"
-        ) {
-          try {
-            window.sessionStorage.removeItem(COLLECTIONS_SNAPSHOT_KEY);
-          } catch {
-            // Ignore storage errors
-          }
-        }
 
         const currentFull = `${window.location.pathname}${window.location.search}`;
         const nextFull = `${nextUrl.pathname}${nextUrl.search}`;

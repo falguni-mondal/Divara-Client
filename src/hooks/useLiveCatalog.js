@@ -1,66 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
-
-/**
- * Fetches live backend-filtered catalog items from GET /api/v1/products (MongoDB $facet).
- * Debounces rapid filter/slider changes (default 350ms) and cancels stale in-flight requests via AbortController.
- */
-export function useLiveCatalog(params, options = {}) {
-  const debounceMs = typeof options.debounceMs === "number" ? options.debounceMs : 350;
-
-  const [items, setItems] = useState([]);
-  const [facets, setFacets] = useState(null);
-  const [meta, setMeta] = useState({ total: 0, page: 1, limit: 24, totalPages: 1 });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  const isFirstLoadRef = useRef(true);
-  const queryKey = JSON.stringify(params || {});
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setLoading(true);
-    setError("");
-
-    // Immediate on initial mount, debounced on subsequent filter changes
-    const delay = isFirstLoadRef.current ? 0 : debounceMs;
-    isFirstLoadRef.current = false;
-
-    const timer = setTimeout(() => {
-      api
-        .get("/products", { params, signal: controller.signal })
-        .then(({ data }) => {
-          if (controller.signal.aborted) return;
-          const nextItems = Array.isArray(data.data?.items) ? data.data.items : [];
-          setItems(nextItems);
-          if (data.data?.facets) setFacets(data.data.facets);
-          if (data.meta) {
-            setMeta(data.meta);
-          } else {
-            setMeta({ total: nextItems.length, page: 1, limit: 24, totalPages: 1 });
-          }
-        })
-        .catch((err) => {
-          if (err.name === "CanceledError" || err.code === "ERR_CANCELED") return;
-          setItems([]);
-          setError("Unable to load collection right now. Please refresh.");
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setLoading(false);
-        });
-    }, delay);
-
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queryKey, debounceMs]);
-
-  return { items, facets, meta, loading, error };
-}
 
 /**
  * Debounced (400ms) backend search hook for SearchOverlay.jsx (GET /api/v1/products/search).

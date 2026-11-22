@@ -4,7 +4,6 @@ import React, {
   useState,
   useRef,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useCallback,
   Suspense,
@@ -19,6 +18,7 @@ import { formatINR } from "@/data/catalogData";
 import { getSizeMeasurements } from "@/data/sizeChart";
 import { useShop } from "@/context/ShopContext";
 import { useToast } from "@/context/ToastContext";
+import { useActivity } from "@/context/ActivityContext";
 import { useSmoothScroll } from "@/components/providers/SmoothScrollProvider";
 import { useSeasonAndYear } from "@/utils/season";
 import { api } from "@/lib/api";
@@ -29,9 +29,6 @@ import ProductReviews from "@/components/shop/ProductReviews";
 if (typeof window !== "undefined") {
   gsap.registerPlugin(ScrollTrigger);
 }
-
-const useIsoLayoutEffect =
-  typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 const MAX_QTY_PER_LINE = 10;
 
@@ -83,6 +80,24 @@ function getAvailableStockForSize(product, size) {
   return Math.max(0, (variant.stockOnHand ?? 0) - (variant.stockReserved ?? 0));
 }
 
+function buildProductTelemetrySnapshot(product, size = "") {
+  if (!product) return null;
+  const variant =
+    product.variants?.find((v) => v.size === size) || product.variants?.[0];
+  return {
+    productId: product._id || product.id || null,
+    slug: product.slug || "",
+    title: product.title || "",
+    sku: variant?.sku || product.sku || "",
+    primaryImage: product.image || product.gallery?.[0] || "",
+    category: product.category || "",
+    fabric: product.fabric || "",
+    color: product.color || "",
+    size: size || variant?.size || "",
+    price: Number(product.price) || 0,
+  };
+}
+
 function ProductDetailContent() {
   const params = useParams();
   const slug = params?.slug;
@@ -104,7 +119,8 @@ function ProductDetailContent() {
 
   const { addToBag, isAdmin, bag } = useShop();
   const toast = useToast();
-  const { refreshScroll, scrollTo } = useSmoothScroll();
+  const { trackProductView, trackAction } = useActivity();
+  const { refreshScroll } = useSmoothScroll();
   const { seasonAndYear } = useSeasonAndYear();
 
   const pageRef = useRef(null);
@@ -112,46 +128,7 @@ function ProductDetailContent() {
   const qtyDebounceRef = useRef(null);
   const stockAbortRef = useRef(null);
   const preloadedImgsRef = useRef(new Set());
-  const userScrolledPdpRef = useRef(false);
-
-  // Lock PDP to top on entry AND right after data finishes loading (unless user already scrolled)
-  useIsoLayoutEffect(() => {
-    if (typeof window === "undefined") return;
-    userScrolledPdpRef.current = false;
-
-    const markScrolled = () => {
-      userScrolledPdpRef.current = true;
-    };
-    window.addEventListener("wheel", markScrolled, { passive: true, once: true });
-    window.addEventListener("touchstart", markScrolled, { passive: true, once: true });
-
-    const snapTop = () => {
-      if (userScrolledPdpRef.current) return;
-      document.documentElement.scrollTop = 0;
-      document.body.scrollTop = 0;
-      window.scrollTo(0, 0);
-      scrollTo(0, { immediate: true, force: true });
-    };
-
-    snapTop();
-    const rafId = window.requestAnimationFrame(snapTop);
-    const t = setTimeout(snapTop, 100);
-
-    return () => {
-      window.cancelAnimationFrame(rafId);
-      clearTimeout(t);
-      window.removeEventListener("wheel", markScrolled);
-      window.removeEventListener("touchstart", markScrolled);
-    };
-  }, [slug, scrollTo]);
-
-  useIsoLayoutEffect(() => {
-    if (loading || userScrolledPdpRef.current || typeof window === "undefined") return;
-    document.documentElement.scrollTop = 0;
-    document.body.scrollTop = 0;
-    window.scrollTo(0, 0);
-    scrollTo(0, { immediate: true, force: true });
-  }, [loading, scrollTo]);
+  const trackedSlugRef = useRef("");
 
   const preloadGalleryImage = useCallback((rawUrl) => {
     if (!rawUrl || typeof window === "undefined") return;
@@ -193,6 +170,11 @@ function ProductDetailContent() {
             "Free Size";
           setSelectedSize(firstInStockSize);
           setRelatedProducts(data.data?.related || []);
+
+          if (trackedSlugRef.current !== live.slug) {
+            trackedSlugRef.current = live.slug;
+            trackProductView(live);
+          }
         } else {
           setProduct(null);
           setNotFound(true);
@@ -210,7 +192,7 @@ function ProductDetailContent() {
     return () => {
       active = false;
     };
-  }, [slug]);
+  }, [slug, trackProductView]);
 
   const inBagQtyForSelected = useMemo(() => {
     if (!product || !selectedSize) return 0;
@@ -396,7 +378,13 @@ function ProductDetailContent() {
   }
 
   const handleToggleAccordion = (id) => {
+    const opening = openAccordion !== id;
     setOpenAccordion((prev) => (prev === id ? "" : id));
+    if (opening) {
+      trackAction(`PDP_ACCORDION_${id.toUpperCase()}`, {
+        product: buildProductTelemetrySnapshot(product, selectedSize),
+      });
+    }
     if (accordionTimerRef.current) clearTimeout(accordionTimerRef.current);
     accordionTimerRef.current = setTimeout(() => refreshScroll(), 320);
   };
@@ -440,6 +428,11 @@ function ProductDetailContent() {
   const handleAddToBag = () => {
     if (isAdmin || isOutOfStock || isBagCapped) return;
     const safeQty = Math.max(1, Math.min(quantity, maxAddable || 1));
+    trackAction("PDP_ADD_TO_BAG", {
+      status: "SUCCESS",
+      product: buildProductTelemetrySnapshot(product, selectedSize),
+      meta: { size: selectedSize, quantity: safeQty },
+    });
     addToBag(product, selectedSize, safeQty);
   };
 
@@ -476,8 +469,6 @@ function ProductDetailContent() {
         <div className="pdp-reveal mb-6">
           <Link
             href="/collections"
-            scroll={false}
-            data-preserve-catalog="true"
             className="inline-flex items-center gap-2 text-xs uppercase tracking-widest text-[#1b1717]/70 hover:text-[#5d100a] transition-colors"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
@@ -494,7 +485,13 @@ function ProductDetailContent() {
                   type="button"
                   onMouseEnter={() => preloadGalleryImage(img)}
                   onFocus={() => preloadGalleryImage(img)}
-                  onClick={() => setActiveImage(img)}
+                  onClick={() => {
+                    setActiveImage(img);
+                    trackAction("PDP_GALLERY_VIEW", {
+                      product: buildProductTelemetrySnapshot(product, selectedSize),
+                      meta: { imageIndex: i + 1 },
+                    });
+                  }}
                   className={`shrink-0 w-16 sm:w-20 aspect-[3/4] overflow-hidden border transition-all cursor-pointer ${
                     activeImage === img
                       ? "border-[#5d100a]"
@@ -595,7 +592,13 @@ function ProductDetailContent() {
                       key={size}
                       type="button"
                       disabled={sizeSoldOut}
-                      onClick={() => setSelectedSize(size)}
+                      onClick={() => {
+                        setSelectedSize(size);
+                        trackAction("PDP_SIZE_SELECT", {
+                          product: buildProductTelemetrySnapshot(product, size),
+                          meta: { size },
+                        });
+                      }}
                       className={`px-4 py-2 text-xs uppercase tracking-wider border rounded-[2px] transition-colors ${
                         sizeSoldOut
                           ? "border-[#1b1717]/15 text-[#1b1717]/35 bg-[#1b1717]/5 cursor-not-allowed line-through"
@@ -624,7 +627,13 @@ function ProductDetailContent() {
                     <div className="inline-flex border border-[#1b1717]/20 rounded-[2px] overflow-hidden text-[10px] uppercase tracking-wider">
                       <button
                         type="button"
-                        onClick={() => setMeasureUnit("in")}
+                        onClick={() => {
+                          setMeasureUnit("in");
+                          trackAction("PDP_SIZE_GUIDE_UNIT", {
+                            product: buildProductTelemetrySnapshot(product, selectedSize),
+                            meta: { unit: "in" },
+                          });
+                        }}
                         className={`px-2 py-0.5 transition-colors cursor-pointer ${
                           measureUnit === "in"
                             ? "bg-[#1b1717] text-[#ffffff]"
@@ -635,7 +644,13 @@ function ProductDetailContent() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => setMeasureUnit("cm")}
+                        onClick={() => {
+                          setMeasureUnit("cm");
+                          trackAction("PDP_SIZE_GUIDE_UNIT", {
+                            product: buildProductTelemetrySnapshot(product, selectedSize),
+                            meta: { unit: "cm" },
+                          });
+                        }}
                         className={`px-2 py-0.5 transition-colors cursor-pointer ${
                           measureUnit === "cm"
                             ? "bg-[#1b1717] text-[#ffffff]"
@@ -834,7 +849,6 @@ function ProductDetailContent() {
                 <Link
                   key={item._id || item.id || item.slug}
                   href={`/shop/${item.slug}`}
-                  scroll={false}
                   className="pdp-related-reveal group flex flex-col"
                 >
                   <div className="w-full aspect-[3/4] overflow-hidden bg-[#1b1717]/5">

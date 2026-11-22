@@ -5,12 +5,26 @@ import Link from "next/link";
 import { X, Plus, Minus, Tag, Loader2, Trash2 } from "lucide-react";
 import { useShop } from "@/context/ShopContext";
 import { useToast } from "@/context/ToastContext";
+import { useActivity } from "@/context/ActivityContext";
 import { useSmoothScroll } from "@/components/providers/SmoothScrollProvider";
 import { formatINR } from "@/data/catalogData";
 import { getApiErrorMessage } from "@/lib/api";
 import ResponsiveImage from "@/components/ui/ResponsiveImage";
 
 const CART_DEBOUNCE_MS = 350;
+
+function mapBagForTelemetry(items = []) {
+  return items.map((item) => ({
+    productId: item.productId || null,
+    slug: item.slug || item.id || "",
+    title: item.title || "",
+    sku: item.sku || "",
+    primaryImage: item.image || "",
+    size: item.size || "",
+    quantity: Number(item.quantity) || 1,
+    price: Number(item.price) || 0,
+  }));
+}
 
 export default function CartDrawer() {
   const {
@@ -31,23 +45,38 @@ export default function CartDrawer() {
   } = useShop();
 
   const toast = useToast();
+  const { trackCartSnapshot } = useActivity();
   const { stopScroll, startScroll } = useSmoothScroll();
 
   const [couponInput, setCouponInput] = useState("");
   const [applying, setApplying] = useState(false);
 
-  // Stores either a number or "" (while user temporarily clears input to type a new digit)
   const [draftQtyMap, setDraftQtyMap] = useState({});
   const [syncingKeys, setSyncingKeys] = useState({});
 
   const timersRef = useRef(new Map());
   const abortsRef = useRef(new Map());
+  const loggedOpenRef = useRef(false);
 
   useEffect(() => {
     if (isBagOpen && user) {
       syncBagAndAutoCoupon();
     }
   }, [isBagOpen, user, syncBagAndAutoCoupon]);
+
+  // Log cart view snapshot whenever the Shopping Bag drawer is opened
+  useEffect(() => {
+    if (isBagOpen && !loggedOpenRef.current) {
+      loggedOpenRef.current = true;
+      trackCartSnapshot(
+        "CART_DRAWER_OPENED",
+        mapBagForTelemetry(bag),
+        Math.max(0, bagSubtotal - discountInr)
+      );
+    } else if (!isBagOpen) {
+      loggedOpenRef.current = false;
+    }
+  }, [isBagOpen, bag, bagSubtotal, discountInr, trackCartSnapshot]);
 
   useEffect(() => {
     const timers = timersRef.current;
@@ -414,7 +443,14 @@ export default function CartDrawer() {
             ) : (
               <Link
                 href="/checkout"
-                onClick={() => setIsBagOpen(false)}
+                onClick={() => {
+                  trackCartSnapshot(
+                    "CART_PROCEED_TO_CHECKOUT",
+                    mapBagForTelemetry(bag),
+                    netSubtotal
+                  );
+                  setIsBagOpen(false);
+                }}
                 className="w-full h-[2.8rem] flex items-center justify-center bg-[#5d100a] text-[#ffffff] text-xs uppercase font-semibold rounded-[2px] hover:bg-[#1b1717] transition-colors"
               >
                 Proceed to Checkout
