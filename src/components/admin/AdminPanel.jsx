@@ -59,11 +59,17 @@ function AdminPanelInner() {
   const activeTab = navItems.some((n) => n.id === requestedTab) ? requestedTab : "overview";
 
   const handleSelectTab = (id) => {
+    setMobileNavOpen(false);
     const params = new URLSearchParams();
     if (id !== "overview") params.set("tab", id);
     const qs = params.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-    setMobileNavOpen(false);
+    const target = qs ? `${pathname}?${qs}` : pathname;
+    const current = searchParams.toString()
+      ? `${pathname}?${searchParams.toString()}`
+      : pathname;
+    if (target !== current) {
+      router.push(target, { scroll: false });
+    }
   };
 
   return (

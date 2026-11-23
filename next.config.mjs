@@ -3,6 +3,8 @@ const nextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
   reactCompiler: true,
+  htmlLimitedBots:
+    /WhatsApp|facebookexternalhit|Facebot|Instagram|Twitterbot|LinkedInBot|TelegramBot|Slackbot|Discordbot|Applebot/i,
   images: {
     remotePatterns: [
       {
@@ -12,7 +14,6 @@ const nextConfig = {
       },
     ],
   },
-  // allowedDevOrigins: ['192.168.10.40'],
   turbopack: {
     rules: {
       "*.css": {

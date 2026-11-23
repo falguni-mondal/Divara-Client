@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   FileSpreadsheet,
   Search,
@@ -69,6 +70,11 @@ function getGstSummary(ord) {
 }
 
 export default function AdminOrdersTab() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const urlOrderNumber = searchParams.get("order") || "";
+
   const [page, setPage] = useUrlPageParam("page");
   const [orders, setOrders] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
@@ -77,6 +83,7 @@ export default function AdminOrdersTab() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [dateRange, setDateRange] = useState({ from: "", to: "" });
   const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [updatingId, setUpdatingId] = useState(null);
   const [exporting, setExporting] = useState(false);
 
@@ -87,6 +94,25 @@ export default function AdminOrdersTab() {
   const [restockOnRefund, setRestockOnRefund] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
   const [notice, setNotice] = useState({ type: "", text: "" });
+
+  const updateUrlParams = useCallback(
+    (mutate) => {
+      const next = new URLSearchParams(searchParams.toString());
+      mutate(next);
+      const qs = next.toString();
+      router.push(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams]
+  );
+
+  const hydrateOrderState = useCallback((ord) => {
+    setSelectedOrder(ord);
+    setCourierName(ord.courierName || "");
+    setTrackingNumber(ord.trackingNumber || "");
+    setAdminNote(ord.returnRequest?.adminNote || "");
+    setRestockOnRefund(!ord.stockRestored);
+    setNotice({ type: "", text: "" });
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -130,13 +156,77 @@ export default function AdminOrdersTab() {
     loadOrders();
   }, [loadOrders]);
 
+  const prevUrlOrderRef = useRef(urlOrderNumber);
+  // Restore ?order=<orderNumber> cleanly on page reload or direct link
+  useEffect(() => {
+    const prevUrlOrder = prevUrlOrderRef.current;
+    prevUrlOrderRef.current = urlOrderNumber;
+
+    if (!urlOrderNumber) {
+      if (prevUrlOrder) setSelectedOrder(null);
+      return;
+    }
+
+    setSelectedOrder((current) => {
+      if (current?.orderNumber === urlOrderNumber) return current;
+      const fromLoaded = orders.find((o) => o.orderNumber === urlOrderNumber);
+      if (fromLoaded) {
+        setCourierName(fromLoaded.courierName || "");
+        setTrackingNumber(fromLoaded.trackingNumber || "");
+        setAdminNote(fromLoaded.returnRequest?.adminNote || "");
+        setRestockOnRefund(!fromLoaded.stockRestored);
+        setNotice({ type: "", text: "" });
+        return fromLoaded;
+      }
+      return current;
+    });
+
+    const alreadyFound = orders.some((o) => o.orderNumber === urlOrderNumber);
+    if (alreadyFound) return;
+
+    let active = true;
+    setDetailLoading(true);
+    api
+      .get("/admin/orders", { params: { status: "ALL", q: urlOrderNumber, limit: 5 } })
+      .then(({ data }) => {
+        if (!active) return;
+        const match = (data.data?.orders || []).find(
+          (o) => o.orderNumber === urlOrderNumber
+        );
+        if (match) {
+          hydrateOrderState(match);
+        } else {
+          setNotice({ type: "error", text: `Order ${urlOrderNumber} not found.` });
+        }
+      })
+      .catch((err) => {
+        if (!active) return;
+        setNotice({
+          type: "error",
+          text: getApiErrorMessage(err, "Failed to load order."),
+        });
+      })
+      .finally(() => {
+        if (active) setDetailLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [urlOrderNumber, orders, hydrateOrderState]);
+
   const openOrderDetail = (ord) => {
-    setSelectedOrder(ord);
-    setCourierName(ord.courierName || "");
-    setTrackingNumber(ord.trackingNumber || "");
-    setAdminNote(ord.returnRequest?.adminNote || "");
-    setRestockOnRefund(!ord.stockRestored);
-    setNotice({ type: "", text: "" });
+    hydrateOrderState(ord);
+    updateUrlParams((p) => {
+      p.set("order", ord.orderNumber);
+    });
+  };
+
+  const closeOrderDetail = () => {
+    setSelectedOrder(null);
+    updateUrlParams((p) => {
+      p.delete("order");
+    });
   };
 
   const handleStatusChange = async (orderId, nextStatus) => {
@@ -247,7 +337,6 @@ export default function AdminOrdersTab() {
     }
   };
 
-  // Exports ALL orders matching the active filters (status, Profit, date range, search) across every page
   const handleExportExcel = async () => {
     setExporting(true);
     setNotice({ type: "", text: "" });
@@ -340,7 +429,16 @@ export default function AdminOrdersTab() {
     }
   };
 
-  // ORDER DETAILS VIEW
+  if (detailLoading || (urlOrderNumber && !selectedOrder && loading)) {
+    return (
+      <div className="space-y-4">
+        <div className="h-10 w-64 bg-[#1b1717]/[0.07] animate-pulse" />
+        <div className="h-64 bg-[#1b1717]/[0.05] animate-pulse" />
+      </div>
+    );
+  }
+
+  // ORDER DETAILS VIEW (URL-synced via ?order=<orderNumber>)
   if (selectedOrder) {
     const gst = getGstSummary(selectedOrder);
     const canRefund =
@@ -354,7 +452,7 @@ export default function AdminOrdersTab() {
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => setSelectedOrder(null)}
+              onClick={closeOrderDetail}
               className="inline-flex items-center gap-1.5 px-3 py-2 border border-[#1b1717]/25 text-xs uppercase tracking-widest hover:border-[#1b1717] cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" />

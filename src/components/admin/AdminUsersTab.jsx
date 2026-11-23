@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Search,
   UserPlus,
@@ -47,7 +48,13 @@ function formatDate(d) {
 }
 
 export default function AdminUsersTab() {
-  const [activeSubTab, setActiveSubTab] = useState("accounts"); // "accounts" | "visitors"
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const activeSubTab = searchParams.get("sub") === "visitors" ? "visitors" : "accounts";
+  const urlViewUserId = searchParams.get("view") || "";
+
   const [page, setPage] = useUrlPageParam("page");
   const [users, setUsers] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
@@ -57,7 +64,6 @@ export default function AdminUsersTab() {
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
 
-  // Add Customer modal
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [createForm, setCreateForm] = useState({
     fullName: "",
@@ -66,7 +72,6 @@ export default function AdminUsersTab() {
     password: "",
   });
 
-  // 360° User Detail state
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
@@ -74,6 +79,28 @@ export default function AdminUsersTab() {
 
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState({ type: "", text: "" });
+
+  const updateUrlParams = useCallback(
+    (mutate) => {
+      const next = new URLSearchParams(searchParams.toString());
+      mutate(next);
+      const qs = next.toString();
+      router.push(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams]
+  );
+
+  const handleSwitchSubTab = (sub) => {
+    setDetail(null);
+    updateUrlParams((p) => {
+      p.delete("view");
+      p.delete("visitor");
+      p.delete("page");
+      p.delete("vpage");
+      if (sub === "visitors") p.set("sub", "visitors");
+      else p.delete("sub");
+    });
+  };
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
@@ -101,12 +128,13 @@ export default function AdminUsersTab() {
   }, [status, page, debouncedSearch]);
 
   useEffect(() => {
-    if (activeSubTab === "accounts") {
+    if (activeSubTab === "accounts" && !urlViewUserId) {
       loadUsers();
     }
-  }, [activeSubTab, loadUsers]);
+  }, [activeSubTab, urlViewUserId, loadUsers]);
 
-  const openUserDetail = async (userId) => {
+  const fetchUserDetail = useCallback(async (userId) => {
+    if (!userId) return;
     setDetailLoading(true);
     setNotice({ type: "", text: "" });
     setEditingProfile(false);
@@ -122,6 +150,32 @@ export default function AdminUsersTab() {
     } finally {
       setDetailLoading(false);
     }
+  }, []);
+
+  // Auto-open 360° profile whenever ?view=<userId> is in the URL (survives reload)
+  useEffect(() => {
+    if (!urlViewUserId) {
+      setDetail(null);
+      return;
+    }
+    if (detail?.user?._id !== urlViewUserId) {
+      fetchUserDetail(urlViewUserId);
+    }
+  }, [urlViewUserId, detail?.user?._id, fetchUserDetail]);
+
+  const openUserDetail = (userId) => {
+    updateUrlParams((p) => {
+      p.delete("sub");
+      p.delete("visitor");
+      p.set("view", userId);
+    });
+  };
+
+  const closeUserDetail = () => {
+    setDetail(null);
+    updateUrlParams((p) => {
+      p.delete("view");
+    });
   };
 
   const handleCreateUser = async (e) => {
@@ -150,8 +204,7 @@ export default function AdminUsersTab() {
       await api.patch(`/admin/users/${detail.user._id}`, editForm);
       setNotice({ type: "success", text: "Customer profile updated." });
       setEditingProfile(false);
-      await openUserDetail(detail.user._id);
-      await loadUsers();
+      await fetchUserDetail(detail.user._id);
     } catch (err) {
       setNotice({ type: "error", text: getApiErrorMessage(err, "Failed to update profile.") });
     } finally {
@@ -167,8 +220,8 @@ export default function AdminUsersTab() {
     try {
       const { data } = await api.patch(`/admin/users/${userObj._id}/toggle-ban`);
       setNotice({ type: "success", text: data.message || "Account status updated." });
-      if (detail?.user?._id === userObj._id) await openUserDetail(userObj._id);
-      await loadUsers();
+      if (detail?.user?._id === userObj._id) await fetchUserDetail(userObj._id);
+      else await loadUsers();
     } catch (err) {
       setNotice({ type: "error", text: getApiErrorMessage(err, "Failed to update account status.") });
     } finally {
@@ -183,7 +236,7 @@ export default function AdminUsersTab() {
     try {
       const { data } = await api.post(`/admin/users/${userId}/revoke-sessions`);
       setNotice({ type: "success", text: data.message || "Sessions revoked." });
-      if (detail?.user?._id === userId) await openUserDetail(userId);
+      if (detail?.user?._id === userId) await fetchUserDetail(userId);
     } catch (err) {
       setNotice({ type: "error", text: getApiErrorMessage(err, "Failed to revoke sessions.") });
     } finally {
@@ -198,8 +251,8 @@ export default function AdminUsersTab() {
     try {
       await api.delete(`/admin/users/${userId}/cart`);
       setNotice({ type: "success", text: "Customer cart cleared." });
-      if (detail?.user?._id === userId) await openUserDetail(userId);
-      await loadUsers();
+      if (detail?.user?._id === userId) await fetchUserDetail(userId);
+      else await loadUsers();
     } catch (err) {
       setNotice({ type: "error", text: getApiErrorMessage(err, "Failed to clear cart.") });
     } finally {
@@ -220,7 +273,7 @@ export default function AdminUsersTab() {
     try {
       await api.delete(`/admin/users/${userObj._id}`);
       setNotice({ type: "success", text: `Deleted ${userObj.email}.` });
-      if (detail?.user?._id === userObj._id) setDetail(null);
+      if (detail?.user?._id === userObj._id) closeUserDetail();
       await loadUsers();
     } catch (err) {
       setNotice({ type: "error", text: getApiErrorMessage(err, "Failed to delete customer.") });
@@ -267,7 +320,7 @@ export default function AdminUsersTab() {
     }
   };
 
-  if (detailLoading) {
+  if (detailLoading || (urlViewUserId && !detail?.user)) {
     return (
       <div className="space-y-4">
         <div className="h-10 w-64 bg-[#1b1717]/[0.07] animate-pulse" />
@@ -281,7 +334,7 @@ export default function AdminUsersTab() {
     );
   }
 
-  // 360° USER DETAIL VIEW
+  // 360° USER DETAIL VIEW (URL-synced via ?view=<userId>)
   if (detail?.user) {
     const u = detail.user;
     const s = detail.summary || {};
@@ -292,7 +345,7 @@ export default function AdminUsersTab() {
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => setDetail(null)}
+              onClick={closeUserDetail}
               className="inline-flex items-center gap-1.5 px-3 py-2 border border-[#1b1717]/25 text-xs uppercase tracking-widest hover:border-[#1b1717] cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
@@ -663,11 +716,11 @@ export default function AdminUsersTab() {
         )}
       </div>
 
-      {/* Accounts vs Anonymous Visitors Sub-Tab Bar */}
+      {/* URL-Synced Sub-Tab Bar (?sub=visitors) */}
       <div className="flex items-center gap-2 border-b border-[#1b1717]/15 pb-3">
         <button
           type="button"
-          onClick={() => setActiveSubTab("accounts")}
+          onClick={() => handleSwitchSubTab("accounts")}
           className={`px-4 py-2 text-xs uppercase tracking-widest transition-colors cursor-pointer ${
             activeSubTab === "accounts"
               ? "bg-[#1b1717] text-[#ffffff]"
@@ -678,7 +731,7 @@ export default function AdminUsersTab() {
         </button>
         <button
           type="button"
-          onClick={() => setActiveSubTab("visitors")}
+          onClick={() => handleSwitchSubTab("visitors")}
           className={`px-4 py-2 text-xs uppercase tracking-widest transition-colors cursor-pointer ${
             activeSubTab === "visitors"
               ? "bg-[#1b1717] text-[#ffffff]"

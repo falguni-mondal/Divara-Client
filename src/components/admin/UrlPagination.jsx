@@ -14,6 +14,7 @@ export function useUrlPageParam(paramName = "page") {
 
   const setPage = (nextPage) => {
     const safe = Math.max(1, Number(nextPage) || 1);
+    if (safe === page) return;
     const params = new URLSearchParams(searchParams.toString());
     if (safe === 1) {
       params.delete(paramName);
@@ -21,7 +22,7 @@ export function useUrlPageParam(paramName = "page") {
       params.set(paramName, String(safe));
     }
     const qs = params.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    router.push(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
 
   return [page, setPage];
