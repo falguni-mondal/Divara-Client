@@ -1,884 +1,111 @@
-"use client";
+import { Suspense } from "react";
+import { connection } from "next/server";
+import ProductDetailClient from "./ProductDetailClient";
 
-import React, {
-  useState,
-  useRef,
-  useEffect,
-  useMemo,
-  useCallback,
-  Suspense,
-} from "react";
-import { useParams } from "next/navigation";
-import Link from "next/link";
-import { Plus, Minus, ArrowLeft, Lock, Ruler, Loader2 } from "lucide-react";
-import gsap from "gsap";
-import { useGSAP } from "@gsap/react";
-import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { formatINR } from "@/data/catalogData";
-import { getSizeMeasurements } from "@/data/sizeChart";
-import { useShop } from "@/context/ShopContext";
-import { useToast } from "@/context/ToastContext";
-import { useActivity } from "@/context/ActivityContext";
-import { useSmoothScroll } from "@/components/providers/SmoothScrollProvider";
-import { useSeasonAndYear } from "@/utils/season";
-import { api } from "@/lib/api";
-import { ikUrl } from "@/lib/imagekit";
-import ResponsiveImage from "@/components/ui/ResponsiveImage";
-import ProductReviews from "@/components/shop/ProductReviews";
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
+const SITE_URL = "https://divara.byfalguni.com";
 
-if (typeof window !== "undefined") {
-  gsap.registerPlugin(ScrollTrigger);
+function toOgJpgUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return null;
+  if (rawUrl.includes("ik.imagekit.io")) {
+    const clean = rawUrl.split("?")[0];
+    // Pad 3:4 fashion portrait onto a luxury ivory 1200x630 JPG (<150 KB, never crops head/hem)
+    return `${clean}?tr=w-1200,h-630,cm-pad_resize,bg-F7F5F2,q-82,f-jpg`;
+  }
+  return rawUrl.startsWith("http") ? rawUrl : null;
 }
 
-const MAX_QTY_PER_LINE = 10;
-
-function ProductDetailSkeleton() {
-  return (
-    <div className="w-full min-h-screen bg-[#ffffff] pt-20 lg:pt-28 pb-16 lg:pb-24">
-      <div className="max-w-[1440px] mx-auto px-[3vw] lg:px-10">
-        <div className="h-4 w-36 bg-[#1b1717]/[0.07] animate-pulse mb-6" />
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12">
-          <div className="lg:col-span-7 flex flex-col-reverse sm:flex-row gap-4">
-            <div className="flex sm:flex-col gap-3">
-              {[1, 2, 3].map((i) => (
-                <div
-                  key={i}
-                  className="shrink-0 w-16 sm:w-20 aspect-[3/4] bg-[#1b1717]/[0.07] animate-pulse"
-                />
-              ))}
-            </div>
-            <div className="flex-1 aspect-[3/4] bg-[#1b1717]/[0.07] animate-pulse" />
-          </div>
-          <div className="lg:col-span-5 space-y-4">
-            <div className="h-3.5 w-44 bg-[#1b1717]/[0.06] animate-pulse" />
-            <div className="h-9 w-4/5 bg-[#1b1717]/[0.08] animate-pulse" />
-            <div className="h-6 w-28 bg-[#1b1717]/[0.07] animate-pulse" />
-            <div className="h-20 w-full bg-[#1b1717]/[0.05] animate-pulse" />
-            <div className="flex gap-2 pt-4">
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="h-9 w-14 bg-[#1b1717]/[0.07] animate-pulse" />
-              ))}
-            </div>
-            <div className="h-12 w-full bg-[#1b1717]/[0.09] animate-pulse mt-6" />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+function formatPriceInr(amount) {
+  const n = Number(amount);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  return `₹${n.toLocaleString("en-IN")}`;
 }
 
-function getAvailableStockForSize(product, size) {
-  if (!Array.isArray(product?.variants) || product.variants.length === 0) {
+async function fetchProductMeta(slug) {
+  "use cache";
+  try {
+    const res = await fetch(`${API_BASE}/products/${encodeURIComponent(slug)}`, {
+      signal: AbortSignal.timeout(4000),
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json?.data?.product || null;
+  } catch {
     return null;
   }
-  const variant = product.variants.find((v) => v.size === size);
-  if (!variant) return 0;
+}
 
-  if (typeof variant.availableStock === "number") {
-    return Math.max(0, variant.availableStock);
+export async function generateMetadata({ params }) {
+  const { slug } = await params;
+  const product = await fetchProductMeta(slug);
+
+  if (!product) {
+    return {
+      title: "Garment Details",
+      description: "Explore handcrafted Indian luxury fashion at Divara.",
+    };
   }
-  return Math.max(0, (variant.stockOnHand ?? 0) - (variant.stockReserved ?? 0));
-}
 
-function buildProductTelemetrySnapshot(product, size = "") {
-  if (!product) return null;
-  const variant =
-    product.variants?.find((v) => v.size === size) || product.variants?.[0];
+  const priceText = formatPriceInr(product.price);
+  const title = priceText ? `${product.title} — ${priceText}` : product.title;
+  const rawDesc =
+    product.description ||
+    `${product.title} in ${product.fabric || "luxury fabric"} (${product.color || "Signature"}). Handcrafted by Divara.`;
+  const description =
+    rawDesc.length > 158 ? `${rawDesc.slice(0, 155).trim()}...` : rawDesc;
+
+  const ogImageUrl = toOgJpgUrl(product.image || product.gallery?.[0]);
+  const productUrl = `${SITE_URL}/shop/${product.slug || slug}`;
+
   return {
-    productId: product._id || product.id || null,
-    slug: product.slug || "",
-    title: product.title || "",
-    sku: variant?.sku || product.sku || "",
-    primaryImage: product.image || product.gallery?.[0] || "",
-    category: product.category || "",
-    fabric: product.fabric || "",
-    color: product.color || "",
-    size: size || variant?.size || "",
-    price: Number(product.price) || 0,
-  };
-}
-
-function ProductDetailContent() {
-  const params = useParams();
-  const slug = params?.slug;
-
-  const [product, setProduct] = useState(null);
-  const [relatedProducts, setRelatedProducts] = useState([]);
-  const [activeImage, setActiveImage] = useState("");
-  const [selectedSize, setSelectedSize] = useState("");
-  const [measureUnit, setMeasureUnit] = useState("in");
-  const [openAccordion, setOpenAccordion] = useState("details");
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
-
-  const [quantity, setQuantity] = useState(1);
-  const [liveMaxStock, setLiveMaxStock] = useState(null);
-  const [stockLoading, setStockLoading] = useState(false);
-  const [stockChecking, setStockChecking] = useState(false);
-  const [stockHint, setStockHint] = useState("");
-
-  const { addToBag, isAdmin, bag } = useShop();
-  const toast = useToast();
-  const { trackProductView, trackAction } = useActivity();
-  const { refreshScroll } = useSmoothScroll();
-  const { seasonAndYear } = useSeasonAndYear();
-
-  const pageRef = useRef(null);
-  const accordionTimerRef = useRef(null);
-  const qtyDebounceRef = useRef(null);
-  const stockAbortRef = useRef(null);
-  const preloadedImgsRef = useRef(new Set());
-  const trackedSlugRef = useRef("");
-
-  const preloadGalleryImage = useCallback((rawUrl) => {
-    if (!rawUrl || typeof window === "undefined") return;
-    const highRes = ikUrl(rawUrl, { width: 1080, quality: 85 });
-    if (!highRes || preloadedImgsRef.current.has(highRes)) return;
-    preloadedImgsRef.current.add(highRes);
-    const pre = new window.Image();
-    pre.src = highRes;
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (accordionTimerRef.current) clearTimeout(accordionTimerRef.current);
-      if (qtyDebounceRef.current) clearTimeout(qtyDebounceRef.current);
-      if (stockAbortRef.current) stockAbortRef.current.abort();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!slug) return;
-    let active = true;
-    setLoading(true);
-    setNotFound(false);
-
-    api
-      .get(`/products/${slug}`)
-      .then(({ data }) => {
-        if (!active) return;
-        const live = data.data?.product;
-        if (live) {
-          setProduct(live);
-          setActiveImage(live.image || live.gallery?.[0] || "");
-          const firstInStockSize =
-            (live.sizes || []).find((sz) => {
-              const avail = getAvailableStockForSize(live, sz);
-              return avail === null || avail > 0;
-            }) ||
-            live.sizes?.[0] ||
-            "Free Size";
-          setSelectedSize(firstInStockSize);
-          setRelatedProducts(data.data?.related || []);
-
-          if (trackedSlugRef.current !== live.slug) {
-            trackedSlugRef.current = live.slug;
-            trackProductView(live);
-          }
-        } else {
-          setProduct(null);
-          setNotFound(true);
-        }
-      })
-      .catch(() => {
-        if (!active) return;
-        setProduct(null);
-        setNotFound(true);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [slug, trackProductView]);
-
-  const inBagQtyForSelected = useMemo(() => {
-    if (!product || !selectedSize) return 0;
-    const match = (bag || []).find(
-      (item) =>
-        (item.productId === product._id ||
-          item.slug === product.slug ||
-          item.id === product.slug) &&
-        item.size === selectedSize
-    );
-    return match ? Number(match.quantity || 0) : 0;
-  }, [bag, product, selectedSize]);
-
-  useEffect(() => {
-    if (!product?._id && !product?.slug) return;
-    if (!selectedSize) return;
-
-    let active = true;
-    setStockLoading(true);
-    setStockHint("");
-    setQuantity(1);
-
-    const fallbackStock = getAvailableStockForSize(product, selectedSize);
-
-    api
-      .post("/products/stock/validate", {
-        items: [
-          {
-            productId: product._id || product.slug,
-            size: selectedSize,
-            quantity: 1,
-          },
-        ],
-      })
-      .then(({ data }) => {
-        if (!active) return;
-        const item = data?.data?.results?.[0];
-        if (item && typeof item.availableStock === "number") {
-          setLiveMaxStock(Math.max(0, item.availableStock));
-        } else {
-          setLiveMaxStock(fallbackStock);
-        }
-      })
-      .catch(() => {
-        if (!active) return;
-        setLiveMaxStock(fallbackStock);
-      })
-      .finally(() => {
-        if (active) setStockLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [product, selectedSize]);
-
-  const scheduleLiveQtyCheck = (targetQty) => {
-    if (!product || !selectedSize) return;
-    if (qtyDebounceRef.current) clearTimeout(qtyDebounceRef.current);
-
-    qtyDebounceRef.current = setTimeout(async () => {
-      if (stockAbortRef.current) stockAbortRef.current.abort();
-      const controller = new AbortController();
-      stockAbortRef.current = controller;
-
-      setStockChecking(true);
-      try {
-        const totalRequested = targetQty + inBagQtyForSelected;
-        const { data } = await api.post(
-          "/products/stock/validate",
-          {
-            items: [
+    title,
+    description,
+    openGraph: {
+      title: `${title} | Divara`,
+      description,
+      url: productUrl,
+      siteName: "Divara",
+      type: "website",
+      locale: "en_IN",
+      ...(ogImageUrl
+        ? {
+            images: [
               {
-                productId: product._id || product.slug,
-                size: selectedSize,
-                quantity: totalRequested,
+                url: ogImageUrl,
+                width: 1200,
+                height: 630,
+                alt: product.title,
+                type: "image/jpeg",
               },
             ],
-          },
-          { signal: controller.signal }
-        );
-
-        const item = data?.data?.results?.[0];
-        if (item && typeof item.availableStock === "number") {
-          const freshAvailable = Math.max(0, item.availableStock);
-          setLiveMaxStock(freshAvailable);
-
-          const maxCanAdd = Math.max(
-            0,
-            Math.min(MAX_QTY_PER_LINE, freshAvailable) - inBagQtyForSelected
-          );
-
-          if (maxCanAdd === 0) {
-            setQuantity(1);
-            setStockHint(
-              freshAvailable === 0
-                ? "This size just sold out."
-                : `You already have all ${freshAvailable} available in your bag.`
-            );
-            toast.warning(
-              freshAvailable === 0
-                ? "This size is no longer in stock."
-                : `Max available stock (${freshAvailable}) is already in your bag.`
-            );
-          } else if (targetQty > maxCanAdd) {
-            setQuantity(maxCanAdd);
-            setStockHint(`Adjusted to ${maxCanAdd} based on live inventory.`);
-            toast.warning(
-              `Only ${freshAvailable} total in stock — quantity adjusted to ${maxCanAdd}.`
-            );
-          } else {
-            setStockHint("");
           }
-        }
-      } catch (err) {
-        if (err?.name !== "CanceledError" && err?.code !== "ERR_CANCELED") {
-          // Non-blocking fallback
-        }
-      } finally {
-        setStockChecking(false);
-      }
-    }, 320);
-  };
-
-  useGSAP(
-    () => {
-      if (loading || !product) return;
-      gsap.fromTo(
-        ".pdp-reveal",
-        { y: 36, opacity: 0 },
-        { y: 0, opacity: 1, duration: 0.85, stagger: 0.08, ease: "power3.out" }
-      );
-
-      gsap.fromTo(
-        ".pdp-related-reveal",
-        { y: 40, opacity: 0 },
-        {
-          y: 0,
-          opacity: 1,
-          duration: 0.85,
-          stagger: 0.1,
-          ease: "power3.out",
-          scrollTrigger: {
-            trigger: ".pdp-related-section",
-            start: "top 85%",
-            toggleActions: "play none none none",
-          },
-        }
-      );
+        : {}),
     },
-    { scope: pageRef, dependencies: [product?.slug, loading] }
-  );
-
-  const sizeMeasurements = useMemo(() => {
-    if (!product || !selectedSize) return null;
-    return getSizeMeasurements(product.category, selectedSize, measureUnit);
-  }, [product, selectedSize, measureUnit]);
-
-  if (loading) {
-    return <ProductDetailSkeleton />;
-  }
-
-  if (notFound || !product) {
-    return (
-      <div className="w-full min-h-[70vh] bg-[#ffffff] text-[#1b1717] pt-36 pb-24 px-6 flex flex-col items-center justify-center text-center">
-        <span className="text-[11px] uppercase tracking-[0.24em] text-[#5d100a] font-semibold">
-          Archive Notice
-        </span>
-        <h1 className="heading-serif text-3xl sm:text-4xl font-normal mt-2">
-          Garment Not Found
-        </h1>
-        <p className="mt-3 text-xs sm:text-sm text-[#1b1717]/65 max-w-md">
-          This piece may have been archived or moved from our current seasonal collection.
-        </p>
-        <Link
-          href="/collections"
-          className="mt-7 px-7 py-3 bg-[#1b1717] text-[#ffffff] hover:bg-[#5d100a] text-xs uppercase tracking-widest transition-colors"
-        >
-          Explore Collection
-        </Link>
-      </div>
-    );
-  }
-
-  const handleToggleAccordion = (id) => {
-    const opening = openAccordion !== id;
-    setOpenAccordion((prev) => (prev === id ? "" : id));
-    if (opening) {
-      trackAction(`PDP_ACCORDION_${id.toUpperCase()}`, {
-        product: buildProductTelemetrySnapshot(product, selectedSize),
-      });
-    }
-    if (accordionTimerRef.current) clearTimeout(accordionTimerRef.current);
-    accordionTimerRef.current = setTimeout(() => refreshScroll(), 320);
-  };
-
-  const fallbackStock = getAvailableStockForSize(product, selectedSize);
-  const effectiveStock =
-    typeof liveMaxStock === "number" ? liveMaxStock : fallbackStock;
-  const maxAddable =
-    typeof effectiveStock === "number"
-      ? Math.max(0, Math.min(MAX_QTY_PER_LINE, effectiveStock) - inBagQtyForSelected)
-      : MAX_QTY_PER_LINE;
-
-  const isOutOfStock = effectiveStock !== null && effectiveStock <= 0;
-  const isBagCapped = !isOutOfStock && maxAddable <= 0;
-  const canIncrement =
-    !isAdmin && !isOutOfStock && !stockLoading && quantity < maxAddable;
-  const canDecrement = !isAdmin && !isOutOfStock && quantity > 1;
-
-  const handleQtyDelta = (delta) => {
-    if (isAdmin || isOutOfStock) return;
-    const next = Math.max(1, Math.min(MAX_QTY_PER_LINE, quantity + delta));
-    if (next === quantity) return;
-    setQuantity(next);
-    setStockHint("");
-    scheduleLiveQtyCheck(next);
-  };
-
-  const handleQtyDirectInput = (e) => {
-    const raw = e.target.value.replace(/[^0-9]/g, "");
-    if (!raw) {
-      setQuantity(1);
-      scheduleLiveQtyCheck(1);
-      return;
-    }
-    const parsed = Math.max(1, Math.min(MAX_QTY_PER_LINE, parseInt(raw, 10) || 1));
-    setQuantity(parsed);
-    setStockHint("");
-    scheduleLiveQtyCheck(parsed);
-  };
-
-  const handleAddToBag = () => {
-    if (isAdmin || isOutOfStock || isBagCapped) return;
-    const safeQty = Math.max(1, Math.min(quantity, maxAddable || 1));
-    trackAction("PDP_ADD_TO_BAG", {
-      status: "SUCCESS",
-      product: buildProductTelemetrySnapshot(product, selectedSize),
-      meta: { size: selectedSize, quantity: safeQty },
-    });
-    addToBag(product, selectedSize, safeQty);
-  };
-
-  const galleryImages =
-    Array.isArray(product.gallery) && product.gallery.length > 0
-      ? product.gallery
-      : [product.image].filter(Boolean);
-
-  const accordionSections = [
-    {
-      id: "details",
-      title: "Product Details",
-      content: (product.craftNotes || []).join(" ") || product.description,
+    twitter: {
+      card: "summary_large_image",
+      title: `${title} | Divara`,
+      description,
+      ...(ogImageUrl ? { images: [ogImageUrl] } : {}),
     },
-    {
-      id: "shipping",
-      title: "Shipping & Returns",
-      content:
-        "Complimentary insured shipping across India within 5 to 7 business days. Easy 7-day returns and size exchanges on unworn items.",
-    },
-    {
-      id: "care",
-      title: "Fabric & Care",
-      content: `${product.fabric} in ${product.color}. Professional dry clean recommended. Store away from direct sunlight.`,
-    },
-  ];
-
-  return (
-    <div
-      ref={pageRef}
-      className="w-full min-h-screen bg-[#ffffff] text-[#1b1717] pt-20 lg:pt-28 pb-16 lg:pb-24"
-    >
-      <div className="max-w-[1440px] mx-auto px-[3vw] lg:px-10">
-        <div className="pdp-reveal mb-6">
-          <Link
-            href="/collections"
-            className="inline-flex items-center gap-2 text-xs uppercase tracking-widest text-[#1b1717]/70 hover:text-[#5d100a] transition-colors"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to Collection</span>
-          </Link>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12">
-          <div className="pdp-reveal lg:col-span-7 flex flex-col-reverse sm:flex-row gap-4">
-            <div className="flex sm:flex-col gap-3 overflow-x-auto sm:overflow-visible">
-              {galleryImages.map((img, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onMouseEnter={() => preloadGalleryImage(img)}
-                  onFocus={() => preloadGalleryImage(img)}
-                  onClick={() => {
-                    setActiveImage(img);
-                    trackAction("PDP_GALLERY_VIEW", {
-                      product: buildProductTelemetrySnapshot(product, selectedSize),
-                      meta: { imageIndex: i + 1 },
-                    });
-                  }}
-                  className={`shrink-0 w-16 sm:w-20 aspect-[3/4] overflow-hidden border transition-all cursor-pointer ${
-                    activeImage === img
-                      ? "border-[#5d100a]"
-                      : "border-transparent opacity-65 hover:opacity-100"
-                  }`}
-                >
-                  <ResponsiveImage
-                    src={img}
-                    alt={`${product.title} view ${i + 1}`}
-                    preset="thumb"
-                    className="w-full h-full object-cover"
-                  />
-                </button>
-              ))}
-            </div>
-
-            <div className="flex-1 aspect-[3/4] overflow-hidden bg-[#1b1717]/5">
-              <ResponsiveImage
-                src={activeImage || product.image}
-                alt={product.title}
-                preset="pdp"
-                priority
-                className="w-full h-full object-cover"
-              />
-            </div>
-          </div>
-
-          <div className="lg:col-span-5 flex flex-col">
-            <span className="pdp-reveal text-xs uppercase tracking-widest text-[#5d100a] font-semibold">
-              {product.categoryLabel || product.category} • {product.season} ({seasonAndYear})
-            </span>
-
-            <h1 className="pdp-reveal heading-serif text-2xl sm:text-3xl lg:text-[32px] font-normal mt-2 text-[#1b1717]">
-              {product.title}
-            </h1>
-
-            <p className="pdp-reveal mt-3 text-lg sm:text-xl font-medium text-[#1b1717]">
-              {formatINR(product.price)}
-            </p>
-            <span className="pdp-reveal text-[11px] text-[#1b1717]/55">
-              Final MRP • Inclusive of 12% GST &amp; all taxes
-            </span>
-
-            <p className="pdp-reveal mt-5 text-xs sm:text-sm font-light leading-relaxed text-[#1b1717]/80">
-              {product.description}
-            </p>
-
-            <div className="pdp-reveal mt-6 flex flex-wrap items-center gap-6 border-y border-[#1b1717]/15 py-3.5 text-xs">
-              <div className="flex items-center gap-2">
-                <span className="uppercase tracking-wider text-[#1b1717]/55">Color:</span>
-                {product.colorHex && (
-                  <span
-                    className="w-3 h-3 rounded-full border border-black/20"
-                    style={{ backgroundColor: product.colorHex }}
-                  />
-                )}
-                <span className="font-medium">{product.color}</span>
-              </div>
-              <div>
-                <span className="uppercase tracking-wider text-[#1b1717]/55 mr-2">Fabric:</span>
-                <span className="font-medium">{product.fabric}</span>
-              </div>
-            </div>
-
-            {/* Size Selector */}
-            <div className="pdp-reveal mt-6">
-              <div className="flex items-center justify-between mb-2.5">
-                <span className="block text-xs uppercase tracking-widest text-[#1b1717]/75">
-                  Select Size
-                </span>
-                {effectiveStock !== null && (
-                  <span
-                    className={`text-[10px] uppercase tracking-widest flex items-center gap-1.5 ${
-                      effectiveStock === 0
-                        ? "text-[#5d100a] font-semibold"
-                        : effectiveStock <= 3
-                        ? "text-[#5d100a]"
-                        : "text-[#1b1717]/55"
-                    }`}
-                  >
-                    {stockLoading && <Loader2 className="w-3 h-3 animate-spin" />}
-                    {effectiveStock === 0
-                      ? "Out of Stock"
-                      : effectiveStock <= 3
-                      ? `Only ${effectiveStock} left`
-                      : `${effectiveStock} In Stock`}
-                  </span>
-                )}
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                {(product.sizes || []).map((size) => {
-                  const avail = getAvailableStockForSize(product, size);
-                  const sizeSoldOut = avail !== null && avail <= 0;
-
-                  return (
-                    <button
-                      key={size}
-                      type="button"
-                      disabled={sizeSoldOut}
-                      onClick={() => {
-                        setSelectedSize(size);
-                        trackAction("PDP_SIZE_SELECT", {
-                          product: buildProductTelemetrySnapshot(product, size),
-                          meta: { size },
-                        });
-                      }}
-                      className={`px-4 py-2 text-xs uppercase tracking-wider border rounded-[2px] transition-colors ${
-                        sizeSoldOut
-                          ? "border-[#1b1717]/15 text-[#1b1717]/35 bg-[#1b1717]/5 cursor-not-allowed line-through"
-                          : selectedSize === size
-                          ? "bg-[#5d100a] text-[#ffffff] border-[#5d100a] cursor-pointer"
-                          : "border-[#1b1717]/25 text-[#1b1717] hover:border-[#1b1717] cursor-pointer"
-                      }`}
-                    >
-                      {size}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Dynamic Selected Size Measurements Helper Card */}
-              {sizeMeasurements && (
-                <div className="mt-4 p-4 border border-[#1b1717]/12 bg-[#faf8f6] rounded-[2px]">
-                  <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-[#1b1717]/10">
-                    <div className="flex items-center gap-2">
-                      <Ruler className="w-3.5 h-3.5 text-[#5d100a]" />
-                      <span className="text-[11px] uppercase tracking-widest font-semibold text-[#1b1717]">
-                        Size {sizeMeasurements.size} Measurements
-                      </span>
-                    </div>
-
-                    <div className="inline-flex border border-[#1b1717]/20 rounded-[2px] overflow-hidden text-[10px] uppercase tracking-wider">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMeasureUnit("in");
-                          trackAction("PDP_SIZE_GUIDE_UNIT", {
-                            product: buildProductTelemetrySnapshot(product, selectedSize),
-                            meta: { unit: "in" },
-                          });
-                        }}
-                        className={`px-2 py-0.5 transition-colors cursor-pointer ${
-                          measureUnit === "in"
-                            ? "bg-[#1b1717] text-[#ffffff]"
-                            : "bg-[#ffffff] text-[#1b1717]/70 hover:text-[#1b1717]"
-                        }`}
-                      >
-                        IN
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMeasureUnit("cm");
-                          trackAction("PDP_SIZE_GUIDE_UNIT", {
-                            product: buildProductTelemetrySnapshot(product, selectedSize),
-                            meta: { unit: "cm" },
-                          });
-                        }}
-                        className={`px-2 py-0.5 transition-colors cursor-pointer ${
-                          measureUnit === "cm"
-                            ? "bg-[#1b1717] text-[#ffffff]"
-                            : "bg-[#ffffff] text-[#1b1717]/70 hover:text-[#1b1717]"
-                        }`}
-                      >
-                        CM
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2.5">
-                    {sizeMeasurements.metrics.map((metric) => (
-                      <div key={metric.label} className="flex flex-col">
-                        <span className="text-[10px] uppercase tracking-wider text-[#1b1717]/55">
-                          {metric.label}
-                        </span>
-                        <span className="text-xs font-medium text-[#1b1717] mt-0.5">
-                          {metric.value}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-
-                  {sizeMeasurements.fitNote && (
-                    <p className="mt-3 pt-2.5 border-t border-[#1b1717]/10 text-[11px] leading-relaxed text-[#1b1717]/65">
-                      {sizeMeasurements.fitNote}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Live Stock-Validated Quantity Selector */}
-            {!isAdmin && !isOutOfStock && (
-              <div className="pdp-reveal mt-6">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs uppercase tracking-widest text-[#1b1717]/75">
-                    Quantity
-                  </span>
-                  {stockChecking ? (
-                    <span className="text-[10px] uppercase tracking-widest text-[#1b1717]/55 inline-flex items-center gap-1">
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      Verifying stock...
-                    </span>
-                  ) : inBagQtyForSelected > 0 ? (
-                    <span className="text-[10px] uppercase tracking-wider text-[#5d100a]">
-                      {inBagQtyForSelected} already in bag
-                    </span>
-                  ) : null}
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <div className="inline-flex items-center border border-[#1b1717]/25 rounded-[2px]">
-                    <button
-                      type="button"
-                      disabled={!canDecrement}
-                      onClick={() => handleQtyDelta(-1)}
-                      aria-label="Decrease quantity"
-                      className={`w-10 h-10 flex items-center justify-center transition-colors ${
-                        canDecrement
-                          ? "text-[#1b1717] hover:bg-[#1b1717]/5 cursor-pointer"
-                          : "text-[#1b1717]/25 cursor-not-allowed"
-                      }`}
-                    >
-                      <Minus className="w-3.5 h-3.5" />
-                    </button>
-
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      aria-label="Quantity"
-                      value={quantity}
-                      onChange={handleQtyDirectInput}
-                      disabled={isBagCapped}
-                      className="w-12 h-10 text-center text-xs font-medium bg-transparent border-x border-[#1b1717]/15 outline-none"
-                    />
-
-                    <button
-                      type="button"
-                      disabled={!canIncrement}
-                      onClick={() => handleQtyDelta(1)}
-                      aria-label="Increase quantity"
-                      className={`w-10 h-10 flex items-center justify-center transition-colors ${
-                        canIncrement
-                          ? "text-[#1b1717] hover:bg-[#1b1717]/5 cursor-pointer"
-                          : "text-[#1b1717]/25 cursor-not-allowed"
-                      }`}
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-
-                  {!canIncrement && !stockLoading && maxAddable > 0 && (
-                    <span className="text-[11px] text-[#5d100a]">
-                      Max available ({maxAddable}) reached
-                    </span>
-                  )}
-                </div>
-
-                {stockHint && (
-                  <p className="mt-1.5 text-[11px] text-[#5d100a]">{stockHint}</p>
-                )}
-              </div>
-            )}
-
-            {/* Add to Bag Button */}
-            <div className="pdp-reveal mt-7">
-              <button
-                type="button"
-                disabled={isAdmin || isOutOfStock || isBagCapped || stockChecking}
-                onClick={handleAddToBag}
-                aria-disabled={isAdmin || isOutOfStock || isBagCapped || stockChecking}
-                title={
-                  isAdmin
-                    ? "Shopping is disabled for Admin accounts"
-                    : isOutOfStock
-                    ? "Selected size is out of stock"
-                    : isBagCapped
-                    ? "Maximum available stock is already in your bag"
-                    : "Add to Bag"
-                }
-                className={`w-full py-3.5 px-6 text-xs uppercase tracking-widest font-semibold rounded-[2px] transition-colors duration-300 flex items-center justify-center gap-2 ${
-                  isAdmin || isOutOfStock || isBagCapped || stockChecking
-                    ? "bg-[#1b1717]/10 text-[#1b1717]/40 border border-[#1b1717]/20 cursor-not-allowed select-none"
-                    : "bg-[#1b1717] text-[#ffffff] hover:bg-[#5d100a] cursor-pointer"
-                }`}
-              >
-                {isAdmin ? (
-                  <>
-                    <Lock className="w-3.5 h-3.5" />
-                    <span>Add to Bag Disabled (Admin Mode)</span>
-                  </>
-                ) : isOutOfStock ? (
-                  <span>Currently Out of Stock</span>
-                ) : isBagCapped ? (
-                  <span>Max Stock Already in Bag</span>
-                ) : (
-                  <span>
-                    Add {quantity > 1 ? `${quantity} ` : ""}to Bag —{" "}
-                    {formatINR(product.price * quantity)}
-                  </span>
-                )}
-              </button>
-              {isAdmin && (
-                <p className="mt-2 text-[11px] text-[#1b1717]/55 text-center">
-                  Signed in as Admin. Switch to a customer account to test bag or checkout.
-                </p>
-              )}
-            </div>
-
-            <div className="pdp-reveal mt-8 divide-y divide-[#1b1717]/15 border-y border-[#1b1717]/15">
-              {accordionSections.map((sec) => {
-                const isOpen = openAccordion === sec.id;
-                return (
-                  <div key={sec.id}>
-                    <button
-                      type="button"
-                      onClick={() => handleToggleAccordion(sec.id)}
-                      className="w-full py-3.5 flex items-center justify-between text-left text-xs uppercase tracking-widest font-medium cursor-pointer"
-                    >
-                      <span>{sec.title}</span>
-                      <Plus
-                        className={`w-3.5 h-3.5 transition-transform duration-300 ${
-                          isOpen ? "rotate-45 text-[#5d100a]" : "rotate-0"
-                        }`}
-                      />
-                    </button>
-                    <div
-                      className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
-                        isOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
-                      }`}
-                    >
-                      <div className="overflow-hidden">
-                        <p className="pb-4 text-xs font-light leading-relaxed text-[#1b1717]/75">
-                          {sec.content}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-
-        <ProductReviews productSlug={product.slug} />
-
-        {relatedProducts.length > 0 && (
-          <div className="pdp-related-section mt-20 border-t border-[#1b1717]/15 pt-12">
-            <h2 className="pdp-related-reveal heading-serif text-xl sm:text-2xl font-normal mb-6">
-              You May Also Like
-            </h2>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-              {relatedProducts.map((item) => (
-                <Link
-                  key={item._id || item.id || item.slug}
-                  href={`/shop/${item.slug}`}
-                  className="pdp-related-reveal group flex flex-col"
-                >
-                  <div className="w-full aspect-[3/4] overflow-hidden bg-[#1b1717]/5">
-                    <ResponsiveImage
-                      src={item.image || item.gallery?.[0]}
-                      alt={item.title}
-                      preset="card"
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <h3 className="heading-serif text-sm sm:text-base font-normal mt-2.5 group-hover:text-[#5d100a] transition-colors">
-                    {item.title}
-                  </h3>
-                  <span className="text-xs font-medium text-[#1b1717]/80 mt-0.5">
-                    {formatINR(item.price)}
-                  </span>
-                </Link>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+  };
 }
 
-export default function ProductDetailPage() {
+// Signals to Next.js 16.4 Cache Components that this dynamic product route intentionally
+// resolves per-slug metadata at request time alongside the client PDP shell.
+async function DynamicRouteMarker() {
+  await connection();
+  return null;
+}
+
+export default function ProductDetailRoute() {
   return (
-    <Suspense fallback={<ProductDetailSkeleton />}>
-      <ProductDetailContent />
-    </Suspense>
+    <>
+      <Suspense fallback={null}>
+        <DynamicRouteMarker />
+      </Suspense>
+      <ProductDetailClient />
+    </>
   );
 }

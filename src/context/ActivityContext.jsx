@@ -22,17 +22,29 @@ import {
   readPersistentDeviceId,
 } from "@/lib/deviceFingerprint";
 
-const CONSENT_STORAGE_KEY = "divara:privacy_consent:v1";
-const IDLE_TIMEOUT_MS = 45 * 1000; // Pause stopwatch after 45s of zero interaction
+const CONSENT_STORAGE_KEY = "divara:privacy_consent:v2";
+const IDLE_TIMEOUT_MS = 45 * 1000;
 const BATCH_FLUSH_MS = 5 * 1000;
 const DWELL_CHECKPOINT_MS = 30 * 1000;
+
+const DEFAULT_CONSENT = {
+  necessary: true,
+  analytics: false,
+  personalization: false,
+  decided: false,
+  updatedAt: null,
+};
 
 const ActivityContext = createContext({
   deviceId: "",
   visitorCode: "",
-  consentStatus: "loading",
-  acceptConsent: () => {},
-  essentialOnlyConsent: () => {},
+  consent: DEFAULT_CONSENT,
+  consentLoaded: false,
+  isPreferencesOpen: false,
+  openPreferences: () => {},
+  closePreferences: () => {},
+  acceptAllConsent: () => {},
+  saveConsentPreferences: () => {},
   trackAction: () => {},
   trackProductView: () => {},
   trackCartSnapshot: () => {},
@@ -99,16 +111,17 @@ function RouteActivityWatcher({ onRouteChange }) {
 }
 
 export function ActivityProvider({ children }) {
-  const [consentStatus, setConsentStatus] = useState("loading");
+  const [consent, setConsent] = useState(DEFAULT_CONSENT);
+  const [consentLoaded, setConsentLoaded] = useState(false);
+  const [isPreferencesOpen, setIsPreferencesOpen] = useState(false);
   const [deviceId, setDeviceId] = useState("");
   const [visitorCode, setVisitorCode] = useState("");
 
   const deviceIdRef = useRef("");
-  const consentRef = useRef("loading");
+  const analyticsAllowedRef = useRef(false);
   const identifyingRef = useRef(null);
   const queueRef = useRef([]);
 
-  // Active-only dwell stopwatch state
   const currentPathRef = useRef("");
   const currentPageViewIdRef = useRef("");
   const activeStartMsRef = useRef(0);
@@ -118,26 +131,34 @@ export function ActivityProvider({ children }) {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    lastInteractionMsRef.current = Date.now();
     try {
-      const saved = window.localStorage.getItem(CONSENT_STORAGE_KEY);
-      if (saved === "accepted" || saved === "essential") {
-        consentRef.current = saved;
-        setConsentStatus(saved);
-      } else {
-        consentRef.current = "unset";
-        setConsentStatus("unset");
+      const raw = window.localStorage.getItem(CONSENT_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.decided === "boolean") {
+          const normalized = {
+            necessary: true,
+            analytics: Boolean(parsed.analytics),
+            personalization: Boolean(parsed.personalization),
+            decided: parsed.decided,
+            updatedAt: parsed.updatedAt || null,
+          };
+          analyticsAllowedRef.current = normalized.decided && normalized.analytics;
+          setConsent(normalized);
+        }
       }
     } catch {
-      consentRef.current = "unset";
-      setConsentStatus("unset");
+      // Treat as undecided if storage is unavailable or corrupted
+    } finally {
+      setConsentLoaded(true);
     }
   }, []);
 
   const ensureIdentified = useCallback(async () => {
     if (typeof window === "undefined") return "";
-    if (consentRef.current !== "accepted") return "";
+    if (!analyticsAllowedRef.current) return "";
 
-    // If cookies/localStorage were cleared mid-session, re-run identification
     const storedLs = getCachedDeviceId();
     if (deviceIdRef.current && storedLs === deviceIdRef.current) {
       return deviceIdRef.current;
@@ -216,7 +237,7 @@ export function ActivityProvider({ children }) {
 
   const flushQueue = useCallback(
     async ({ useBeacon = false, includeDwell = true } = {}) => {
-      if (consentRef.current !== "accepted") return;
+      if (!analyticsAllowedRef.current) return;
 
       if (includeDwell) {
         const dwellEv = takePendingDwellEvent();
@@ -253,7 +274,7 @@ export function ActivityProvider({ children }) {
       try {
         await api.post("/activity/batch", payload);
       } catch {
-        // Drop silently on transient network error to avoid memory leaks
+        // Non-blocking
       }
     },
     [ensureIdentified, takePendingDwellEvent]
@@ -261,7 +282,7 @@ export function ActivityProvider({ children }) {
 
   const enqueueEvent = useCallback(
     (event) => {
-      if (consentRef.current !== "accepted") return;
+      if (!analyticsAllowedRef.current) return;
       if (currentPathRef.current.startsWith("/admin")) return;
 
       queueRef.current.push({
@@ -277,18 +298,16 @@ export function ActivityProvider({ children }) {
     [flushQueue]
   );
 
-  // Trigger identification when consent is accepted
   useEffect(() => {
-    if (consentStatus === "accepted") {
+    if (consent.decided && consent.analytics) {
       ensureIdentified().then((did) => {
         if (did && currentPathRef.current && !currentPathRef.current.startsWith("/admin")) {
           flushQueue({ useBeacon: false, includeDwell: false });
         }
       });
     }
-  }, [consentStatus, ensureIdentified, flushQueue]);
+  }, [consent.decided, consent.analytics, ensureIdentified, flushQueue]);
 
-  // Handle SPA route changes (flush previous page's active dwell + record new PAGE_VIEW)
   const handleRouteChange = useCallback(
     (pathname) => {
       if (pathname.startsWith("/admin")) {
@@ -313,7 +332,6 @@ export function ActivityProvider({ children }) {
           ? Date.now()
           : 0;
 
-      // Re-verify deviceId if cookies/localStorage were wiped before this navigation
       ensureIdentified();
 
       enqueueEvent({
@@ -328,7 +346,6 @@ export function ActivityProvider({ children }) {
     [enqueueEvent, ensureIdentified, flushQueue, pauseStopwatch]
   );
 
-  // Visibility, pagehide, idle pause (45s), periodic batch flush & 30s dwell checkpoints
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -356,10 +373,9 @@ export function ActivityProvider({ children }) {
       pauseStopwatch();
     };
 
-    // Smart global button click capture (skips /admin and unlabeled icon noise)
     const handleGlobalClick = (e) => {
       markInteraction();
-      if (consentRef.current !== "accepted") return;
+      if (!analyticsAllowedRef.current) return;
       if (currentPathRef.current.startsWith("/admin")) return;
 
       const target = e.target?.closest?.("button, a[data-track]");
@@ -378,7 +394,6 @@ export function ActivityProvider({ children }) {
 
       if (!rawText) return;
 
-      // Re-identify if cookies were deleted right before clicking a button
       if (!getCachedDeviceId()) {
         ensureIdentified();
       }
@@ -434,26 +449,40 @@ export function ActivityProvider({ children }) {
     };
   }, [enqueueEvent, ensureIdentified, flushQueue, pauseStopwatch, resumeStopwatch]);
 
-  const acceptConsent = useCallback(() => {
-    consentRef.current = "accepted";
-    setConsentStatus("accepted");
+  const persistConsentState = useCallback((next) => {
+    const record = {
+      necessary: true,
+      analytics: Boolean(next.analytics),
+      personalization: Boolean(next.personalization),
+      decided: true,
+      updatedAt: new Date().toISOString(),
+    };
+    analyticsAllowedRef.current = record.analytics;
+    if (!record.analytics) {
+      queueRef.current = [];
+    }
+    setConsent(record);
+    setIsPreferencesOpen(false);
     try {
-      window.localStorage.setItem(CONSENT_STORAGE_KEY, "accepted");
+      window.localStorage.setItem(CONSENT_STORAGE_KEY, JSON.stringify(record));
     } catch {
-      // Ignore
+      // Ignore storage errors
     }
   }, []);
 
-  const essentialOnlyConsent = useCallback(() => {
-    consentRef.current = "essential";
-    setConsentStatus("essential");
-    queueRef.current = [];
-    try {
-      window.localStorage.setItem(CONSENT_STORAGE_KEY, "essential");
-    } catch {
-      // Ignore
-    }
-  }, []);
+  const acceptAllConsent = useCallback(() => {
+    persistConsentState({ analytics: true, personalization: true });
+  }, [persistConsentState]);
+
+  const saveConsentPreferences = useCallback(
+    ({ analytics = false, personalization = false } = {}) => {
+      persistConsentState({ analytics, personalization });
+    },
+    [persistConsentState]
+  );
+
+  const openPreferences = useCallback(() => setIsPreferencesOpen(true), []);
+  const closePreferences = useCallback(() => setIsPreferencesOpen(false), []);
 
   const trackAction = useCallback(
     (actionName, extra = {}) => {
@@ -520,9 +549,13 @@ export function ActivityProvider({ children }) {
     () => ({
       deviceId,
       visitorCode,
-      consentStatus,
-      acceptConsent,
-      essentialOnlyConsent,
+      consent,
+      consentLoaded,
+      isPreferencesOpen,
+      openPreferences,
+      closePreferences,
+      acceptAllConsent,
+      saveConsentPreferences,
       trackAction,
       trackProductView,
       trackCartSnapshot,
@@ -530,9 +563,13 @@ export function ActivityProvider({ children }) {
     [
       deviceId,
       visitorCode,
-      consentStatus,
-      acceptConsent,
-      essentialOnlyConsent,
+      consent,
+      consentLoaded,
+      isPreferencesOpen,
+      openPreferences,
+      closePreferences,
+      acceptAllConsent,
+      saveConsentPreferences,
       trackAction,
       trackProductView,
       trackCartSnapshot,

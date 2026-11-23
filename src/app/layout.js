@@ -27,6 +27,7 @@ const lato = Lato({
 });
 
 export const metadata = {
+  metadataBase: new URL("https://divara.byfalguni.com"),
   title: {
     default: "Divara — Limitless Luxury",
     template: "%s | Divara",
@@ -36,9 +37,18 @@ export const metadata = {
     "Divara — Discover timeless Indian luxury fashion. Handwoven sarees, couture dresses, artisanal denim, and pure silk shirts.",
   openGraph: {
     title: "Divara — Limitless Luxury",
+    description:
+      "Discover timeless Indian luxury fashion. Handwoven sarees, couture dresses, artisanal denim, and pure silk shirts.",
     siteName: "Divara",
     url: "https://divara.byfalguni.com",
     type: "website",
+    locale: "en_IN",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Divara — Limitless Luxury",
+    description:
+      "Discover timeless Indian luxury fashion. Handwoven sarees, couture dresses, artisanal denim, and pure silk shirts.",
   },
 };
 

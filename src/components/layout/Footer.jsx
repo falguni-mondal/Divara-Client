@@ -9,6 +9,7 @@ import { ScrollTrigger } from "gsap/ScrollTrigger";
 import BrandLogo from "@/components/ui/BrandLogo";
 import AnimatedNavLink from "@/components/ui/AnimatedNavLink";
 import InteractiveInput from "@/components/ui/InteractiveInput";
+import { useActivity } from "@/context/ActivityContext";
 import { useSeasonAndYear } from "@/utils/season";
 import { api, getApiErrorMessage } from "@/lib/api";
 
@@ -62,6 +63,7 @@ export default function Footer() {
   const [newsletterMsg, setNewsletterMsg] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const { currentYear, seasonAndYear } = useSeasonAndYear();
+  const { openPreferences } = useActivity();
 
   useGSAP(
     () => {
@@ -191,6 +193,15 @@ export default function Footer() {
                       </Suspense>
                     </li>
                   ))}
+                  <li>
+                    <button
+                      type="button"
+                      onClick={openPreferences}
+                      className="uppercase text-left hover:text-[#ffffff]/70 transition-colors cursor-pointer"
+                    >
+                      Cookie Preferences
+                    </button>
+                  </li>
                 </ul>
               </div>
 
