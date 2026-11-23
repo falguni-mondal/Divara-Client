@@ -13,6 +13,7 @@ import { formatINR } from "@/data/catalogData";
 import ResponsiveImage from "@/components/ui/ResponsiveImage";
 import InteractiveInput from "@/components/ui/InteractiveInput";
 import { getStoredAttribution } from "@/components/analytics/UtmTracker";
+import { useAiConcierge } from "@/context/AiConciergeContext";
 
 const ADDRESS_LABEL_PRESETS = ["Home", "Work", "Other"];
 
@@ -48,6 +49,28 @@ export default function CheckoutPage() {
     discountInr,
     syncBagAndAutoCoupon,
   } = useShop();
+
+
+  const { registerFormHandler } = useAiConcierge();
+
+  useEffect(() => {
+    return registerFormHandler("checkout_address", (fields) => {
+      setSelectedAddressId(null);
+      setShipping((prev) => ({
+        ...prev,
+        ...(fields.fullName ? { fullName: fields.fullName } : {}),
+        ...(fields.email ? { email: fields.email } : {}),
+        ...(fields.phone ? { phone: fields.phone } : {}),
+        ...(fields.line1 ? { line1: fields.line1 } : {}),
+        ...(fields.line2 ? { line2: fields.line2 } : {}),
+        ...(fields.city ? { city: fields.city } : {}),
+        ...(fields.state ? { state: fields.state } : {}),
+        ...(fields.postalCode ? { postalCode: fields.postalCode } : {}),
+      }));
+    });
+  }, [registerFormHandler]);
+
+  
 
   const [savedAddresses, setSavedAddresses] = useState([]);
   const [selectedAddressId, setSelectedAddressId] = useState(null);

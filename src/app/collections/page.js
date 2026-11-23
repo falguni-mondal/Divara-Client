@@ -18,6 +18,7 @@ import { api } from "@/lib/api";
 import { useSeasonAndYear } from "@/utils/season";
 import { useSmoothScroll } from "@/components/providers/SmoothScrollProvider";
 import ResponsiveImage from "@/components/ui/ResponsiveImage";
+import { useAiConcierge } from "@/context/AiConciergeContext";
 
 const useIsoLayoutEffect =
   typeof window !== "undefined" ? useLayoutEffect : useEffect;
@@ -184,6 +185,26 @@ function CollectionsContent() {
 
   const { currentSeason, seasonAndYear } = useSeasonAndYear();
   const { scrollTo } = useSmoothScroll();
+
+
+  const { registerVisibleItems } = useAiConcierge();
+
+  useEffect(() => {
+    registerVisibleItems(
+      products.slice(0, 24).map((p, idx) => ({
+        position: idx + 1,
+        slug: p.slug,
+        title: p.title,
+        price: Number(p.price) || 0,
+        color: p.color || "",
+        colorHex: p.colorHex || "",
+        fabric: p.fabric || "",
+        category: p.category || "",
+      }))
+    );
+    return () => registerVisibleItems([]);
+  }, [products, registerVisibleItems]);
+
 
   // SSR-safe desktop detection for new-tab product opening
   useEffect(() => {

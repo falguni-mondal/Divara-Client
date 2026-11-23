@@ -12,6 +12,7 @@ import { useSmoothScroll } from "@/components/providers/SmoothScrollProvider";
 import { useShop } from "@/context/ShopContext";
 import { api, getApiErrorMessage } from "@/lib/api";
 import { ikUrl } from "@/lib/imagekit";
+import { useAiConcierge } from "@/context/AiConciergeContext";
 
 if (typeof window !== "undefined") {
   gsap.registerPlugin(ScrollTrigger);
@@ -185,6 +186,23 @@ export default function ContactPage() {
       }));
     }
   }, [user]);
+
+
+  const { registerFormHandler } = useAiConcierge();
+
+  useEffect(() => {
+    return registerFormHandler("contact", (fields) => {
+      setFormData((prev) => ({
+        ...prev,
+        ...(fields.fullName || fields.name ? { name: fields.fullName || fields.name } : {}),
+        ...(fields.email ? { email: fields.email } : {}),
+        ...(fields.subject ? { subject: fields.subject } : {}),
+        ...(fields.message ? { message: fields.message } : {}),
+      }));
+    });
+  }, [registerFormHandler]);
+
+  
 
   const loadMyTickets = useCallback(async () => {
     if (!user) return;

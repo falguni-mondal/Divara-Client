@@ -40,6 +40,13 @@ function NavbarInner() {
     setIsSearchOpen(false);
   }, [pathname]);
 
+  // Allow NIRA AI overlay command ("open search") to trigger SearchOverlay
+  useEffect(() => {
+    const onOpenSearch = () => setIsSearchOpen(true);
+    window.addEventListener("divara:open-search", onOpenSearch);
+    return () => window.removeEventListener("divara:open-search", onOpenSearch);
+  }, []);
+
   const isLinkActive = (href) => {
     if (href === "/") return pathname === "/";
     if (href === "/collections") {
