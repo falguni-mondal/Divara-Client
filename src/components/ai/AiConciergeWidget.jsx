@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { X, Send, Mic, Volume2, VolumeX, Trash2, Brain, Loader2 } from "lucide-react";
 import { useShop } from "@/context/ShopContext";
+import { useActivity } from "@/context/ActivityContext";
 import { useAiConcierge } from "@/context/AiConciergeContext";
 
 const AI_NAME = "NIRA";
@@ -11,13 +12,29 @@ const BADGE_H = 42;
 const EDGE_PAD = 16;
 const TOP_PAD = 84;
 const BOTTOM_PAD = 24;
+const BANNER_CLEARANCE = 216;
 const POS_KEY = "divara:nira_dock:v1";
+
+function getViewport() {
+  if (typeof window === "undefined") return { w: 1280, h: 800 };
+  return {
+    w: Math.round(window.visualViewport?.width || window.innerWidth),
+    h: Math.round(window.visualViewport?.height || window.innerHeight),
+  };
+}
+
+function clampY(y, vh) {
+  const maxY = Math.max(TOP_PAD, vh - BADGE_H - BOTTOM_PAD);
+  return Math.max(TOP_PAD, Math.min(maxY, y));
+}
 
 function pickAudioMime() {
   if (typeof MediaRecorder === "undefined") return "";
-  return ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find((m) =>
-    MediaRecorder.isTypeSupported(m)
-  ) || "";
+  return (
+    ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find((m) =>
+      MediaRecorder.isTypeSupported(m)
+    ) || ""
+  );
 }
 
 function SimpleBotIcon({ className = "w-7 h-7" }) {
@@ -34,7 +51,8 @@ function SimpleBotIcon({ className = "w-7 h-7" }) {
 }
 
 export default function AiConciergeWidget() {
-  const { isAdmin, isBagOpen } = useShop();
+  const { isAdmin, authLoading, isBagOpen } = useShop();
+  const { consent, consentLoaded, isPreferencesOpen } = useActivity();
   const {
     currentPath,
     isOpen,
@@ -61,47 +79,68 @@ export default function AiConciergeWidget() {
 
   const [dockSide, setDockSide] = useState("left");
   const [pos, setPos] = useState(null);
+  const [viewport, setViewport] = useState({ w: 1280, h: 800 });
   const [isDragging, setIsDragging] = useState(false);
   const [showPopout, setShowPopout] = useState(false);
   const [popoutDismissed, setPopoutDismissed] = useState(false);
 
   const dragRef = useRef({ active: false, moved: false, sx: 0, sy: 0, ox: 0, oy: 0 });
   const listEndRef = useRef(null);
-  const recRef = useRef({ recorder: null, stream: null, chunks: [], start: 0, startX: 0, cancelled: false, maxT: null, secT: null });
+  const recRef = useRef({
+    recorder: null,
+    stream: null,
+    chunks: [],
+    start: 0,
+    startX: 0,
+    cancelled: false,
+    maxT: null,
+    secT: null,
+  });
 
   const isBlocked = isAdmin || (currentPath && currentPath.startsWith("/admin"));
 
   useEffect(() => {
-    const clampY = (y) => Math.max(TOP_PAD, Math.min(window.innerHeight - BADGE_H - BOTTOM_PAD, y));
+    const vp = getViewport();
+    setViewport(vp);
+
     let side = "left";
-    let y = window.innerHeight - BADGE_H - BOTTOM_PAD;
+    let y = clampY(vp.h - BADGE_H - BOTTOM_PAD, vp.h);
     try {
       const saved = JSON.parse(localStorage.getItem(POS_KEY) || "null");
       if (saved?.side === "right" || saved?.side === "left") side = saved.side;
-      if (typeof saved?.y === "number") y = clampY(saved.y);
+      if (Number.isFinite(saved?.y)) y = clampY(saved.y, vp.h);
     } catch {}
 
     setDockSide(side);
-    setPos({ x: side === "right" ? window.innerWidth - BADGE_W - EDGE_PAD : EDGE_PAD, y });
+    setPos({ x: side === "right" ? vp.w - BADGE_W - EDGE_PAD : EDGE_PAD, y });
 
-    const onResize = () =>
-      setPos((p) =>
-        p
-          ? {
-              x: p.x + BADGE_W / 2 >= window.innerWidth / 2 ? window.innerWidth - BADGE_W - EDGE_PAD : EDGE_PAD,
-              y: clampY(p.y),
-            }
-          : p
-      );
+    const onResize = () => {
+      const nextVp = getViewport();
+      setViewport(nextVp);
+      setPos((p) => {
+        if (!p) return p;
+        const right = p.x + BADGE_W / 2 >= nextVp.w / 2;
+        setDockSide(right ? "right" : "left");
+        return {
+          x: right ? nextVp.w - BADGE_W - EDGE_PAD : EDGE_PAD,
+          y: clampY(p.y, nextVp.h),
+        };
+      });
+    };
+
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    window.visualViewport?.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.visualViewport?.removeEventListener("resize", onResize);
+    };
   }, []);
 
   useEffect(() => {
-    if (isOpen || popoutDismissed || isBlocked) return setShowPopout(false);
+    if (authLoading || isOpen || popoutDismissed || isBlocked) return setShowPopout(false);
     const t = setTimeout(() => setShowPopout(true), 1500);
     return () => clearTimeout(t);
-  }, [isOpen, popoutDismissed, isBlocked]);
+  }, [authLoading, isOpen, popoutDismissed, isBlocked]);
 
   useEffect(() => {
     listEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -126,12 +165,19 @@ export default function AiConciergeWidget() {
     return () => window.removeEventListener("keydown", onKey);
   }, [isRecording]);
 
-  if (isBlocked) return null;
+  if (authLoading || isBlocked) return null;
+
+  const consentBannerVisible = consentLoaded && (!consent.decided || isPreferencesOpen);
+  const avoidsBanner = consentBannerVisible && (viewport.w < 640 || dockSide === "right");
+  const displayY =
+    pos && !isDragging && avoidsBanner
+      ? Math.max(TOP_PAD, Math.min(pos.y, viewport.h - BADGE_H - BANNER_CLEARANCE))
+      : pos?.y ?? 0;
 
   const onBadgeDown = (e) => {
     if (!pos) return;
     e.currentTarget.setPointerCapture?.(e.pointerId);
-    dragRef.current = { active: true, moved: false, sx: e.clientX, sy: e.clientY, ox: pos.x, oy: pos.y };
+    dragRef.current = { active: true, moved: false, sx: e.clientX, sy: e.clientY, ox: pos.x, oy: displayY };
     setIsDragging(true);
   };
 
@@ -142,9 +188,10 @@ export default function AiConciergeWidget() {
     const dy = e.clientY - d.sy;
     if (Math.abs(dx) > 5 || Math.abs(dy) > 5) d.moved = true;
     if (!d.moved) return;
+    const vp = getViewport();
     setPos({
-      x: Math.max(EDGE_PAD, Math.min(window.innerWidth - BADGE_W - EDGE_PAD, d.ox + dx)),
-      y: Math.max(TOP_PAD, Math.min(window.innerHeight - BADGE_H - BOTTOM_PAD, d.oy + dy)),
+      x: Math.max(EDGE_PAD, Math.min(vp.w - BADGE_W - EDGE_PAD, d.ox + dx)),
+      y: clampY(d.oy + dy, vp.h),
     });
   };
 
@@ -160,15 +207,17 @@ export default function AiConciergeWidget() {
       return setIsOpen(true);
     }
 
+    const vp = getViewport();
     setPos((curr) => {
       if (!curr) return curr;
-      const right = curr.x + BADGE_W / 2 >= window.innerWidth / 2;
+      const right = curr.x + BADGE_W / 2 >= vp.w / 2;
       const side = right ? "right" : "left";
+      const safeY = clampY(curr.y, vp.h);
       setDockSide(side);
       try {
-        localStorage.setItem(POS_KEY, JSON.stringify({ side, y: curr.y }));
+        localStorage.setItem(POS_KEY, JSON.stringify({ side, y: safeY }));
       } catch {}
-      return { x: right ? window.innerWidth - BADGE_W - EDGE_PAD : EDGE_PAD, y: curr.y };
+      return { x: right ? vp.w - BADGE_W - EDGE_PAD : EDGE_PAD, y: safeY };
     });
   };
 
@@ -292,8 +341,8 @@ export default function AiConciergeWidget() {
     <>
       {!isOpen && !isBagOpen && pos && (
         <div
-          style={{ left: `${pos.x}px`, top: `${pos.y}px` }}
-          className={`fixed z-40 flex items-center ${isDragging ? "" : "transition-[left,top] duration-300 ease-out"}`}
+          style={{ left: `${pos.x}px`, top: `${displayY}px` }}
+          className={`fixed z-[950] flex items-center ${isDragging ? "" : "transition-[left,top] duration-300 ease-out"}`}
         >
           <div className="relative flex items-center">
             <button
@@ -347,7 +396,7 @@ export default function AiConciergeWidget() {
       {isOpen && (
         <aside
           aria-label={`${AI_NAME} AI Assistant`}
-          className={`fixed bottom-4 z-50 w-[min(92vw,390px)] h-[min(78vh,560px)] flex flex-col bg-white border border-[#1b1717]/15 shadow-2xl overflow-hidden ${
+          className={`fixed bottom-4 z-[960] w-[min(92vw,390px)] h-[min(78vh,560px)] flex flex-col bg-white border border-[#1b1717]/15 shadow-2xl overflow-hidden ${
             dockSide === "right" ? "right-4" : "left-4"
           }`}
         >
