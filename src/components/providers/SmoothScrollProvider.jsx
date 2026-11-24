@@ -32,7 +32,23 @@ const SmoothScrollContext = createContext({
 
 export const useSmoothScroll = () => useContext(SmoothScrollContext);
 
-// Isolated inside <Suspense> so usePathname() never blocks Next.js 16.4 prerendering
+function isInsideScrollableContainer(node) {
+  let el = node;
+  while (el && el !== document.body && el !== document.documentElement) {
+    if (el.hasAttribute?.("data-lenis-prevent")) return true;
+    const style = window.getComputedStyle(el);
+    const overflowY = style.overflowY;
+    if (
+      (overflowY === "auto" || overflowY === "scroll") &&
+      el.scrollHeight > el.clientHeight + 1
+    ) {
+      return true;
+    }
+    el = el.parentElement;
+  }
+  return false;
+}
+
 function ScrollRouteController({ lenisRef, nativeLockCountRef }) {
   const pathname = usePathname();
   const isPopStateRef = useRef(false);
@@ -47,8 +63,6 @@ function ScrollRouteController({ lenisRef, nativeLockCountRef }) {
     return () => mq.removeEventListener("change", update);
   }, []);
 
-  // Desktop: Lenis ON everywhere.
-  // Mobile (< 1024px): Lenis OFF only on /collections and /shop/* for native Back scroll.
   const isShopRoute =
     pathname === "/collections" || pathname.startsWith("/shop/");
   const shouldEnableLenis = isDesktop || !isShopRoute;
@@ -59,9 +73,7 @@ function ScrollRouteController({ lenisRef, nativeLockCountRef }) {
     const prevRestoration = window.history.scrollRestoration;
     try {
       window.history.scrollRestoration = "manual";
-    } catch {
-      // Ignore locked scrollRestoration
-    }
+    } catch {}
 
     const handlePopState = () => {
       isPopStateRef.current = true;
@@ -73,16 +85,13 @@ function ScrollRouteController({ lenisRef, nativeLockCountRef }) {
       window.removeEventListener("popstate", handlePopState);
       try {
         window.history.scrollRestoration = prevRestoration || "auto";
-      } catch {
-        // Ignore
-      }
+      } catch {}
     };
   }, []);
 
   useIsoLayoutEffect(() => {
     if (typeof window === "undefined") return;
 
-    // Clear any leftover native drawer scroll lock on route change
     nativeLockCountRef.current = 0;
     document.documentElement.style.overflow = "";
     document.body.style.overflow = "";
@@ -90,7 +99,7 @@ function ScrollRouteController({ lenisRef, nativeLockCountRef }) {
     const recentPop =
       isPopStateRef.current ||
       (typeof window.__DIVARA_POPSTATE_AT__ === "number" &&
-        Date.now() - window.__DIVARA_POPSTATE_AT__ < 2000);
+        Date.now() - window.__DIVARA_POPSTATE_AT__ < 2500);
 
     isPopStateRef.current = false;
 
@@ -116,6 +125,7 @@ function ScrollRouteController({ lenisRef, nativeLockCountRef }) {
       wheelMultiplier: 1.15,
       touchMultiplier: 1.6,
       autoResize: true,
+      prevent: isInsideScrollableContainer,
     });
 
     lenisRef.current = lenis;

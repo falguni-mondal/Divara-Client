@@ -24,7 +24,12 @@ const QUICK_SUGGESTIONS = [
   "Denim",
 ];
 
-export default function SearchOverlay({ isOpen, onClose }) {
+export default function SearchOverlay({
+  isOpen,
+  onClose,
+  initialQuery = "",
+  initialQuerySeq = 0,
+}) {
   const [query, setQuery] = useState("");
   const [isFocused, setIsFocused] = useState(false);
 
@@ -43,7 +48,13 @@ export default function SearchOverlay({ isOpen, onClose }) {
   const { stopScroll, startScroll } = useSmoothScroll();
   const { currentSeason, seasonAndYear } = useSeasonAndYear();
 
-  // Debounced (400ms) backend search across all product fields
+  // Populate search input & trigger live search when invoked by NIRA AI
+  useEffect(() => {
+    if (initialQuerySeq > 0 && initialQuery) {
+      setQuery(initialQuery);
+    }
+  }, [initialQuery, initialQuerySeq]);
+
   const { matches: matchedProducts, totalMatches, isSearching } = useLiveSearch(
     query,
     isOpen,
@@ -65,9 +76,7 @@ export default function SearchOverlay({ isOpen, onClose }) {
 
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (e.key === "Escape" && isOpen) {
-        onClose();
-      }
+      if (e.key === "Escape" && isOpen) onClose();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);

@@ -193,7 +193,11 @@ export function AiConciergeProvider({ children }) {
         } else if (action.type === "overlay") {
           if (action.target === "cart") setIsBagOpen(true);
           else if (action.target === "cookie_preferences") openPreferences();
-          else if (action.target === "search") window.dispatchEvent(new CustomEvent("divara:open-search"));
+          else if (action.target === "search") {
+            window.dispatchEvent(
+              new CustomEvent("divara:open-search", { detail: { query: action.query || "" } })
+            );
+          }
         } else if (action.type === "google_signin") {
           window.location.href = `${API_BASE_URL}/auth/google`;
         } else if (action.type === "fill_form" && action.fields) {

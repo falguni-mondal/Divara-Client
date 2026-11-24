@@ -31,6 +31,7 @@ import { api, API_BASE_URL, getApiErrorMessage } from "@/lib/api";
 import { useShop } from "@/context/ShopContext";
 import { formatINR } from "@/data/catalogData";
 import { printOrderInvoice } from "@/lib/printInvoice";
+import { useAiConcierge } from "@/context/AiConciergeContext";
 
 const AdminPanel = dynamic(() => import("@/components/admin/AdminPanel"), {
   ssr: false,
@@ -147,6 +148,27 @@ export default function AccountPage() {
   const [editingAddressId, setEditingAddressId] = useState(null);
   const [addressForm, setAddressForm] = useState(EMPTY_ADDRESS);
   const [savingAddress, setSavingAddress] = useState(false);
+  const { registerFormHandler } = useAiConcierge();
+
+  useEffect(() => {
+    if (!user || isAdmin) return;
+    return registerFormHandler("account_address", (fields) => {
+      setActiveTab("addresses");
+      setEditingAddressId(null);
+      setShowAddressForm(true);
+      setAddressForm((prev) => ({
+        ...prev,
+        ...(fields.label ? { label: fields.label } : {}),
+        ...(fields.fullName ? { fullName: fields.fullName } : {}),
+        ...(fields.phone ? { phone: fields.phone } : {}),
+        ...(fields.line1 ? { line1: fields.line1 } : {}),
+        ...(fields.line2 ? { line2: fields.line2 } : {}),
+        ...(fields.city ? { city: fields.city } : {}),
+        ...(fields.state ? { state: fields.state } : {}),
+        ...(fields.postalCode ? { postalCode: fields.postalCode } : {}),
+      }));
+    });
+  }, [user, isAdmin, registerFormHandler]);
 
   const pageRef = useRef(null);
   const wasLoggedInRef = useRef(false);

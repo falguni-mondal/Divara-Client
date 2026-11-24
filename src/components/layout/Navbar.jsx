@@ -27,6 +27,7 @@ const NAV_LINKS = [
 function NavbarInner() {
   const [showNav, setShowNav] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [aiSearchReq, setAiSearchReq] = useState({ query: "", seq: 0 });
   const pathname = usePathname();
   const { bagCount, setIsBagOpen, isAdmin } = useShop();
   const logoContainerRef = useRef(null);
@@ -40,9 +41,12 @@ function NavbarInner() {
     setIsSearchOpen(false);
   }, [pathname]);
 
-  // Allow NIRA AI overlay command ("open search") to trigger SearchOverlay
   useEffect(() => {
-    const onOpenSearch = () => setIsSearchOpen(true);
+    const onOpenSearch = (e) => {
+      const q = typeof e?.detail?.query === "string" ? e.detail.query.trim() : "";
+      if (q) setAiSearchReq((prev) => ({ query: q, seq: prev.seq + 1 }));
+      setIsSearchOpen(true);
+    };
     window.addEventListener("divara:open-search", onOpenSearch);
     return () => window.removeEventListener("divara:open-search", onOpenSearch);
   }, []);
@@ -192,7 +196,12 @@ function NavbarInner() {
         </div>
       </header>
 
-      <SearchOverlay isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
+      <SearchOverlay
+        isOpen={isSearchOpen}
+        onClose={() => setIsSearchOpen(false)}
+        initialQuery={aiSearchReq.query}
+        initialQuerySeq={aiSearchReq.seq}
+      />
 
       <NavMenu
         showNav={showNav}

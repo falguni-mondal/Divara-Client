@@ -50,27 +50,8 @@ export default function CheckoutPage() {
     syncBagAndAutoCoupon,
   } = useShop();
 
-
   const { registerFormHandler } = useAiConcierge();
-
-  useEffect(() => {
-    return registerFormHandler("checkout_address", (fields) => {
-      setSelectedAddressId(null);
-      setShipping((prev) => ({
-        ...prev,
-        ...(fields.fullName ? { fullName: fields.fullName } : {}),
-        ...(fields.email ? { email: fields.email } : {}),
-        ...(fields.phone ? { phone: fields.phone } : {}),
-        ...(fields.line1 ? { line1: fields.line1 } : {}),
-        ...(fields.line2 ? { line2: fields.line2 } : {}),
-        ...(fields.city ? { city: fields.city } : {}),
-        ...(fields.state ? { state: fields.state } : {}),
-        ...(fields.postalCode ? { postalCode: fields.postalCode } : {}),
-      }));
-    });
-  }, [registerFormHandler]);
-
-  
+  const aiFilledAddressRef = useRef(false);
 
   const [savedAddresses, setSavedAddresses] = useState([]);
   const [selectedAddressId, setSelectedAddressId] = useState(null);
@@ -99,6 +80,24 @@ export default function CheckoutPage() {
   const [confirmedOrder, setConfirmedOrder] = useState(null);
 
   const paymentCompletedRef = useRef(false);
+
+  useEffect(() => {
+    return registerFormHandler("checkout_address", (fields) => {
+      aiFilledAddressRef.current = true;
+      setSelectedAddressId(null);
+      setShipping((prev) => ({
+        ...prev,
+        ...(fields.fullName ? { fullName: fields.fullName } : {}),
+        ...(fields.email ? { email: fields.email } : {}),
+        ...(fields.phone ? { phone: fields.phone } : {}),
+        ...(fields.line1 ? { line1: fields.line1 } : {}),
+        ...(fields.line2 ? { line2: fields.line2 } : {}),
+        ...(fields.city ? { city: fields.city } : {}),
+        ...(fields.state ? { state: fields.state } : {}),
+        ...(fields.postalCode ? { postalCode: fields.postalCode } : {}),
+      }));
+    });
+  }, [registerFormHandler]);
 
   useEffect(() => {
     if (!verifying && !confirmedOrder) return;
@@ -150,7 +149,7 @@ export default function CheckoutPage() {
         const list = data.data?.addresses || [];
         setSavedAddresses(list);
         const def = list.find((a) => a.isDefault) || list[0];
-        if (def) applyAddress(def, user.email);
+        if (def && !aiFilledAddressRef.current) applyAddress(def, user.email);
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -177,7 +176,6 @@ export default function CheckoutPage() {
     paymentCompletedRef.current = false;
 
     try {
-      // Step 1: Final live stock, active-status, price, and coupon preflight check BEFORE reserving
       const { data: preflightRes } = await api.post("/checkout/preflight", {
         couponCode: appliedCoupon?.code || null,
       });
@@ -192,7 +190,6 @@ export default function CheckoutPage() {
         return;
       }
 
-      // Step 2: Authoritative MongoDB ACID transaction check + temporary 15m reservation + Razorpay order
       const { data } = await api.post("/checkout/session", {
         shippingAddress: shipping,
         couponCode: appliedCoupon?.code || null,
@@ -345,7 +342,6 @@ export default function CheckoutPage() {
       }
       toast.success(`Shipping address saved as "${finalLabel}".`);
     } catch {
-      // Never block payment if saving the address fails
       toast.warning("Could not save address to your profile, continuing to payment...");
     } finally {
       setSavingAddrBeforePay(false);

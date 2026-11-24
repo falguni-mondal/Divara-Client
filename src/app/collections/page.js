@@ -216,17 +216,49 @@ function CollectionsContent() {
   }, []);
 
   // Native pre-paint scroll restore on mobile Back navigation
+  // Restore exact scroll position on Back navigation (works for both Desktop Lenis and Mobile native scroll)
   useIsoLayoutEffect(() => {
     if (!snap || typeof window === "undefined") return;
     const targetY = Math.max(0, Number(snap.scrollY) || 0);
-    window.scrollTo({ top: targetY, behavior: "auto" });
-    const rafId = window.requestAnimationFrame(() => {
+    const applyPos = () => {
       window.scrollTo({ top: targetY, behavior: "auto" });
-      lastCatalogState = null;
+      scrollTo(targetY, { immediate: true, force: true });
+    };
+    applyPos();
+    const raf1 = window.requestAnimationFrame(() => {
+      applyPos();
+      window.requestAnimationFrame(applyPos);
     });
-    return () => window.cancelAnimationFrame(rafId);
+    const t = setTimeout(() => {
+      applyPos();
+      lastCatalogState = null;
+    }, 140);
+    return () => {
+      window.cancelAnimationFrame(raf1);
+      clearTimeout(t);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Continuously keep snapshot fresh so both card clicks and NIRA AI navigation preserve exact scrollY
+  useEffect(() => {
+    if (typeof window === "undefined" || products.length === 0) return;
+    const syncSnapshot = () => {
+      lastCatalogState = {
+        urlKey,
+        products,
+        page,
+        totalCount,
+        totalPages,
+        appliedFilters,
+        sortBy,
+        scrollY: Math.round(window.scrollY || 0),
+      };
+    };
+    syncSnapshot();
+    window.addEventListener("scroll", syncSnapshot, { passive: true });
+    return () => window.removeEventListener("scroll", syncSnapshot);
+  }, [urlKey, products, page, totalCount, totalPages, appliedFilters, sortBy]);
 
   // Sync URL query params when changed externally (e.g. Navbar category links)
   useEffect(() => {
