@@ -1,7 +1,8 @@
-import { api } from "./api";
+import { api, getApiErrorMessage } from "./api";
 
 const IK_ENDPOINT = (process.env.NEXT_PUBLIC_IMAGEKIT_URL_ENDPOINT || "").replace(/\/$/, "");
 const IK_PUBLIC_KEY = process.env.NEXT_PUBLIC_IMAGEKIT_PUBLIC_KEY || "";
+const ALLOWED_REVIEW_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 export function isImageKitUrl(src) {
   return Boolean(src && typeof src === "string" && src.includes("ik.imagekit.io"));
@@ -78,16 +79,22 @@ async function uploadToImageKit({ file, authEndpoint, folder, prefix }) {
   };
 }
 
-export function uploadReviewImageToImageKit(file) {
-  if (file.size > 5 * 1024 * 1024) {
-    throw new Error("Each review image must be under 5 MB");
+export async function uploadReviewImageToImageKit(file) {
+  if (!ALLOWED_REVIEW_MIMES.has(file.type)) {
+    throw new Error("Only JPEG, PNG, and WebP images are allowed for reviews");
   }
-  return uploadToImageKit({
-    file,
-    authEndpoint: "/media/review-upload-auth",
-    folder: "/divara/reviews",
-    prefix: "review",
-  });
+  if (file.size > 3 * 1024 * 1024) {
+    throw new Error("Each review image must be under 3 MB");
+  }
+
+  try {
+    const { data } = await api.post("/media/review-upload", file, {
+      headers: { "Content-Type": file.type },
+    });
+    return data.data;
+  } catch (err) {
+    throw new Error(getApiErrorMessage(err, "Review image upload failed."));
+  }
 }
 
 export function uploadAdminImageToImageKit(file, folder = "/divara/products") {
